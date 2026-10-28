@@ -23,6 +23,27 @@ struct Main {
             done.wait()
             return
         }
+        // Someone else's recording into the queue: PointAndYap --import <folder or .zip> [--author name]
+        if let i = args.firstIndex(of: "--import"), i + 1 < args.count {
+            let src = URL(fileURLWithPath: args[i + 1])
+            let author = args.firstIndex(of: "--author").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+            let done = DispatchSemaphore(value: 0)
+            nonisolated(unsafe) var failed = false
+            Task.detached {
+                do {
+                    let dir = try await Import.run(src, author: author)
+                    let item = Items.items(in: dir, state: nil).items.first
+                    print("Imported \(dir.lastPathComponent)\(item.map { " from \($0.author?.name ?? "?"): \"\($0.title)…\"" } ?? " (no speech)")")
+                } catch {
+                    print("Not imported: \(error)")
+                    failed = true
+                }
+                done.signal()
+            }
+            done.wait()
+            if failed { exit(1) }
+            return
+        }
         // Offscreen design check: PointAndYap --render-ui <dir>
         if let i = args.firstIndex(of: "--render-ui"), i + 1 < args.count {
             MainActor.assumeIsolated { RenderUI.run(to: URL(fileURLWithPath: args[i + 1])) }

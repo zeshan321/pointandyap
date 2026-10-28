@@ -13,6 +13,7 @@ struct SessionRow: Identifiable, Equatable {
     var by: String?
     var note: String?
     var noSpeech = false
+    var author: String?   // someone else's recording
 }
 
 @MainActor
@@ -185,7 +186,7 @@ final class AppState: ObservableObject {
             let item = Items.items(in: dir, state: Items.readState(dir)).items.first
             return SessionRow(dir: dir, date: e.started, duration: Int(e.duration.rounded()), points: e.points.count,
                               title: title, status: item?.status ?? "", by: item?.by, note: item?.note,
-                              noSpeech: title == "No speech")
+                              noSpeech: title == "No speech", author: e.author?.name)
         }) {
             rows.append(row)
             if rows.filter({ !$0.noSpeech }).count == 20 { break }

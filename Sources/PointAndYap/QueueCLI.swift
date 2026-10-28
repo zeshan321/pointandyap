@@ -7,7 +7,7 @@ enum QueueCLI {
             let items = Items.all().filter { $0.status != "done" }
             if items.isEmpty { print("Nothing open in Point and Yap."); return }
             for i in items {
-                print("## \(i.id) [\(i.status.replacingOccurrences(of: "_", with: " "))\(i.by.map { " by \($0)" } ?? "")]\n\(i.body)\n")
+                print("## \(i.id) [\(i.status.replacingOccurrences(of: "_", with: " "))\(i.by.map { " by \($0)" } ?? "")]\(i.author.map { " from \($0.name)" } ?? "")\n\(i.body)\n")
             }
             print("When an item is fixed: \(binary) --done <id> --note \"what changed\"")
             return

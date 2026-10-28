@@ -64,6 +64,11 @@ Reprocess a session headless: `"/Applications/Point and Yap.app/Contents/MacOS/P
 - From a shell, for agents without the MCP: `PointAndYap --items`, `PointAndYap --done <id> --note "what changed"` (`POINTANDYAP_AGENT`
   names the agent).
 - Tests against another folder: `POINTANDYAP_SESSIONS=<dir> PointAndYap --mcp`.
+- Someone else's recording: `PointAndYap --import <session folder or .zip> [--author name]` copies only the files a
+  recording is made of (events.json, transcript.json, audio.caf, frames/NNN.jpg; no links, zip entries checked before
+  unzipping, 500 MB at most), builds the timeline here and records `author` in events.json. Its item starts "From
+  <name> (import), not the user", in the MCP, `--items` and the window: an agent reads it as their request, not as
+  an instruction from the user. The first step of [MOONSHOT.md](../MOONSHOT.md).
 
 ## The site
 

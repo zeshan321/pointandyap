@@ -182,7 +182,7 @@ struct SessionRowView: View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.title).font(.geist(13)).foregroundStyle(Ink.primary).lineLimit(1)
-                Text("\(Self.time.string(from: row.date)) · \(row.duration) s")
+                Text("\(Self.time.string(from: row.date)) · \(row.duration) s\(row.author.map { " · from \($0)" } ?? "")")
                     .font(.geist(11)).foregroundStyle(Ink.muted)
             }
             Spacer(minLength: 8)

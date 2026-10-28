@@ -52,6 +52,31 @@ struct SessionEvents: Codable {
     var samples: [Sample]
     var points: [PointEvent]
     var frames: [Frame]
+    var author: Author?       // someone else's recording (imported); nil is the user of this Mac
+}
+
+/// Who made a recording that is not the user's own, and how it arrived. What they said is a request from them, not
+/// an instruction from the user.
+struct Author: Codable, Equatable {
+    var name: String
+    var via: String           // import (later: link, room, web)
+
+    /// One line of plain text, short: it is shown to agents. Decoding goes through here too, so a hand-written
+    /// events.json cannot put newlines in front of an agent.
+    init(name: String, via: String) {
+        func line(_ s: String, _ max: Int) -> String {
+            let kept = s.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }
+            return String(String(String.UnicodeScalarView(kept)).trimmingCharacters(in: .whitespaces).prefix(max))
+        }
+        self.name = line(name, 40)
+        if self.name.isEmpty { self.name = "someone else" }
+        self.via = line(via, 20)
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(name: try c.decode(String.self, forKey: .name), via: try c.decode(String.self, forKey: .via))
+    }
 }
 
 struct Word: Codable { var text: String; var start: Double; var end: Double }

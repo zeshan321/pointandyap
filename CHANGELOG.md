@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `PointAndYap --import <folder or .zip> --author <name>` adds a recording someone else made to your queue, with their
+  name on it. Agents are told it is that person's request, not an instruction from you.
+
 ## 0.1.5
 
 - The installer no longer contains a folder path from the Mac it was built on. Nothing changes in the app.
