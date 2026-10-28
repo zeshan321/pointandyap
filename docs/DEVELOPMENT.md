@@ -68,7 +68,7 @@ Reprocess a session headless: `"/Applications/Point and Yap.app/Contents/MacOS/P
   recording is made of (events.json, transcript.json, audio.caf, frames/NNN.jpg; no links, zip entries checked before
   unzipping, 500 MB at most), builds the timeline here and records `author` in events.json. Its item starts "From
   <name> (import), not the user", in the MCP, `--items` and the window: an agent reads it as their request, not as
-  an instruction from the user. The first step of [MOONSHOT.md](../MOONSHOT.md).
+  an instruction from the user.
 
 ## Live review
 
