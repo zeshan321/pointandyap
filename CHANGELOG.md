@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A recording that asks for several things, pointing at a different element for each, becomes one item per thing: each
+  is fixed, marked done and confirmed on its own, and the agent still sees the whole recording. When it is unclear, the
+  recording stays one item. A row in the window opens to show each request in full, with the agent's whole note.
+
 - `PointAndYap --import <folder or .zip> --author <name>` adds a recording someone else made to your queue, with their
   name on it. Agents are told it is that person's request, not an instruction from you.
 - Review links (needs a relay, see DEVELOPMENT.md): share a recording's screenshots as a link; anyone can point and
@@ -14,7 +18,8 @@
   browser and screen size, and a crop of their screen redrawn on your Mac. Everyone in the link sees each other's
   cursors and the requests as they move. Agents call `wait_for_items` to fix things while people watch; hot reload
   shows the fix, and the person who asked answers "Looks right" or "Not yet" (a follow-up item). `get_review_summary`
-  writes the review up for a pull request.
+  writes the review up for a pull request. Everyone sees whether an agent is waiting for requests; while recording, the
+  bar marks each thing pointed at; a first-time guest gets a short welcome; the owner can accept requests from the bar.
 - Invites: someone with Point and Yap joins your invite link, and every recording they make (Control twice, point,
   talk) comes to your queue instead of theirs, with their name, until they press Stop.
 
