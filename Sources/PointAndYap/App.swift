@@ -10,7 +10,9 @@ struct Main {
         //   PointAndYap --done <id>... [--note "what changed"]
         if args.contains("--items") || args.contains("--done") { QueueCLI.run(args); return }
         // Review links: --share [<session>] [--relay <url>], --pull, --links, --revoke <id>, --accept <item id>...
-        if ["--share", "--pull", "--links", "--revoke", "--accept"].contains(where: args.contains) { LinksCLI.run(args); return }
+        if ["--share", "--invite", "--pull", "--links", "--revoke", "--accept", "--join", "--leave", "--send"].contains(where: args.contains) {
+            LinksCLI.run(args); return
+        }
         // Local MCP server for coding agents: PointAndYap --mcp
         if args.contains("--mcp") { MCPServer.run(); return }
         // Headless: PointAndYap --process <session dir>
@@ -120,7 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         // Review links: what guests sent, every 30 s (nothing goes online without a link).
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { if self?.state.phase == .idle { self?.state.pullLinks() } }
+            MainActor.assumeIsolated { if self?.state.phase == .idle { self?.state.pullLinks(); Task { await Join.retry() } } }
         }
         state.refreshAccess()
         doubleControl = DoubleControl(fire: { [weak self] in if Prefs.doubleControl { self?.state.toggle() } },
@@ -129,6 +131,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         Updater.shared.start(state: state)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// pointandyap://join?link=<an invite>: asks in the window before anything is sent anywhere.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where url.scheme == "pointandyap" && url.host == "join" {
+            if case .recording = state.phase {} else { window.makeKeyAndOrderFront(nil); NSApp.activate() }
+            Task { await state.lookInvite(url.absoluteString) }
+        }
     }
 
     func applicationDidBecomeActive(_ note: Notification) { state.refreshAccess(); state.loadSessions() }

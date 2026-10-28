@@ -57,6 +57,11 @@ button { font: inherit; cursor: pointer; }
 .quiet { padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: none; color: var(--ink-2); }
 .rec { width: 10px; height: 10px; border-radius: 50%; background: var(--rec); }
 .summary { color: var(--ink-2); margin-right: 4px; }
+.steps { margin: 22px 0 0; padding: 0; list-style: none; counter-reset: s; display: grid; gap: 14px; max-width: 620px; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 28px 1fr; gap: 12px; align-items: center; }
+.steps li::before { content: counter(s); width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line);
+                    display: grid; place-items: center; font-size: 13px; color: var(--faint); }
+a.primary { text-decoration: none; }
 .ok { margin: 0 0 10px; padding: 12px 14px; border-radius: 10px; background: var(--ok-bg); color: var(--ok); }
 .error { margin: 0; color: var(--warn); }
 @media (max-width: 520px) { h1 { font-size: 19px; } .strip button { width: 84px; } .primary, .quiet { flex: 1 1 auto; justify-content: center; } }

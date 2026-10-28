@@ -7,6 +7,8 @@
 - Review links (needs a relay, see DEVELOPMENT.md): share a recording's screenshots as a link; anyone can point and
   talk (or type) on them in a browser, end-to-end encrypted to your Mac. What they send comes back as recordings with
   their name, transcribed on your Mac, and waits in To accept until you put it in the queue.
+- Invites: someone with Point and Yap joins your invite link, and every recording they make (Control twice, point,
+  talk) comes to your queue instead of theirs, with their name, until they press Stop.
 
 ## 0.1.5
 

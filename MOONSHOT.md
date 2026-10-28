@@ -115,6 +115,11 @@ of the owner's Mac rather than the link key, so other guests cannot read it eith
 the owner's words are not shared unless they give a title. Deferred: Accessibility snapshots per frame (they need
 live testing with the permissions); for now a guest's point resolves only where the owner's recording had an element.
 
+*Added after trying it:* pointing at a frozen screenshot is a poor experience (people try to click around it), so
+**invites** came first: a guest with Point and Yap joins a link and uses the app exactly as the owner does, on their
+own screen, and each recording comes to the owner's queue, held in triage. The screenshot page stays as the fallback
+for guests without a Mac.
+
 ### Phase 2: Live rooms (months 4–6)
 
 - Press Control three times (or Start a room): ScreenCaptureKit streams **one chosen window** (never the whole screen

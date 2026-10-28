@@ -36,6 +36,28 @@ final class AppState: ObservableObject {
     }
     /// A new version downloaded and ready to install (Updater).
     @Published var updateReady: String?
+    /// Joined to someone's invite: recordings go to them (Join).
+    @Published var joined: JoinRecord? = Join.current()
+    /// An invite opened from a link, waiting for Join or Not now.
+    @Published var invite: JoinRecord?
+
+    func lookInvite(_ link: String) async {
+        do { invite = try await Join.lookup(link) } catch { say("That invite does not open: \(error)") }
+    }
+
+    func answerInvite(_ yes: Bool) {
+        if yes, let j = invite {
+            do { try Join.join(j); joined = Join.current(); say("Recordings go to \(j.to) now") } catch { say("Couldn't join: \(error)") }
+        }
+        invite = nil
+    }
+
+    func leave() {
+        Join.leave()
+        joined = nil
+        say("Recordings stay here again")
+    }
+
     /// The coding agents found on this Mac, while the first-run question is open.
     @Published var askAgents: [String] = []
 
@@ -105,13 +127,26 @@ final class AppState: ObservableObject {
         onRecordingChanged?(false)
         Task {
             let dir = await r.stop()
+            // Joined: it is held from before it is listed, so this Mac's agents never take it, then sent.
+            let to = Join.current()
+            if let to { Join.hold(dir, for: to) }
             loadSessions()
             // The short pointer goes on the clipboard as soon as the timeline exists; the MCP and the folder fill in after.
             _ = await Process.run(dir: dir, onTimeline: { [weak self] in
+                guard to == nil else { return }
                 self?.copyPointer(dir)
                 Sounds.play("done")
                 self?.say("Copied. Paste it into your agent")
             })
+            if let to {
+                do {
+                    try await Join.send(dir, to: to)
+                    Sounds.play("done")
+                    say("Sent to \(to.to)")
+                } catch {
+                    say("Not sent yet, trying again: \(error)")
+                }
+            }
             phase = .idle
             loadSessions()
         }

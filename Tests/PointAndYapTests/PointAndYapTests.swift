@@ -207,6 +207,32 @@ final class PointAndYapTests: XCTestCase {
         XCTAssertTrue(Items.openItems(limit: 5, take: true, agent: "a").contains { $0.id == item.id })
     }
 
+    func testARecordingAGuestMadeInPointAndYapArrivesHeldWithTheirElements() async throws {
+        let (r, mine) = link("2026-10-17_120011")
+        let theirs = session("2026-10-17_120012")
+        var files: [String: String] = [:]
+        for f in ["events.json", "transcript.json", "frames/001.jpg"] { files[f] = try Data(contentsOf: theirs.appendingPathComponent(f)).base64EncodedString() }
+        files["../../escape.json"] = Data("{}".utf8).base64EncodedString()
+        let sealed = try Links.sealFeedback(try JSONEncoder().encode(Recording(name: "Lee", files: files)), to: mine.publicKey,
+                                            linkKey: Links.unb64url(r.key)!, id: r.id)
+        let rec = try JSONDecoder().decode(Recording.self, from: try Links.open(sealed, link: r))
+        let dir = try await Links.received(rec, link: r)
+        let item = try XCTUnwrap(Items.items(in: dir, state: Items.readState(dir)).items.first)
+        XCTAssertEqual(item.status, "triage")
+        XCTAssertEqual(item.author, Author(name: "Lee", via: "link"))
+        XCTAssertTrue(item.body.contains("AXButton \"Save\""), "the elements from the guest's own screen")
+        XCTAssertEqual(item.crops.count, 2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: Self.root.deletingLastPathComponent().appendingPathComponent("escape.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: Self.root.appendingPathComponent("escape.json").path))
+    }
+
+    func testWhileJoinedARecordingIsHeldFromThisMacsAgents() {
+        let dir = session("2026-10-17_120013")
+        Join.hold(dir, for: JoinRecord(id: "x", relay: "", key: "", ownerKey: "", from: "Zeshan"))
+        XCTAssertTrue(Items.openItems(limit: 5, take: true, agent: "a").isEmpty)
+        XCTAssertEqual(Items.items(in: dir, state: Items.readState(dir)).items.first?.by, "sending to Zeshan")
+    }
+
     func testTypedFeedbackKeepsItsWordsInOrder() {
         let w = Links.typed("make this bigger", over: 6)
         XCTAssertEqual(w.map(\.text), ["make", "this", "bigger"])

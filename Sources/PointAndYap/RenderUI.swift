@@ -21,6 +21,16 @@ enum RenderUI {
         s.updateReady = "0.1.3"
         s.showWelcome = false
         write(MainView(state: s), "window.png", dir)
+        s.invite = JoinRecord(id: "x", relay: "", key: "", ownerKey: "", from: "Zeshan")
+        write(MainView(state: s), "window-invite.png", dir)
+        s.invite = nil
+        s.joined = JoinRecord(id: "x", relay: "", key: "", ownerKey: "", from: "Zeshan")
+        s.sessions = [
+            SessionRow(dir: dir.appendingPathComponent("e"), date: Date(), duration: 14, points: 2, title: "This filter should remember what I picked", status: "triage", by: "sending to Zeshan"),
+            SessionRow(dir: dir.appendingPathComponent("f"), date: Date().addingTimeInterval(-400), duration: 8, points: 1, title: "The empty state here is confusing", status: "done", by: "you", note: "Sent to Zeshan"),
+        ]
+        write(MainView(state: s), "window-joined.png", dir)
+        s.joined = nil
         s.updateReady = nil
         s.showWelcome = true
         write(MainView(state: s), "welcome.png", dir)

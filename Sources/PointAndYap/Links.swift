@@ -34,6 +34,14 @@ struct Feedback: Decodable {
     struct P: Decodable { var t: Double; var end: Double; var kind: String; var f: String; var x: Double; var y: Double }
 }
 
+/// A recording a guest made in Point and Yap and sent to a link they joined: its files, base64.
+struct Recording: Codable {
+    var v = 1
+    var kind = "recording"
+    var name: String
+    var files: [String: String]
+}
+
 enum Links {
     enum Failure: Error, CustomStringConvertible {
         case refused(String)
@@ -108,6 +116,24 @@ enum Links {
         return (data, w, h)
     }
 
+    /// An invite: a link with no screenshots. A guest with Point and Yap joins it, and their recordings come here.
+    static func invite(relay: URL, from owner: String?) async throws -> LinkRecord {
+        let key = SymmetricKey(size: .bits256)
+        let mine = P256.KeyAgreement.PrivateKey()
+        let created = try await call(relay, "POST", "/api/links", token: nil, body: nil)
+        guard let obj = try? JSONSerialization.jsonObject(with: created) as? [String: Any],
+              let id = obj["id"] as? String, let token = obj["token"] as? String else { throw Failure.refused("the relay did not make a link") }
+        var tour: [String: Any] = ["v": 1, "id": id, "key": mine.publicKey.x963Representation.base64EncodedString(), "frames": [], "invite": true]
+        if let owner, !owner.isEmpty { tour["from"] = Author(name: owner, via: "").name }
+        _ = try await call(relay, "PUT", "/api/links/\(id)/tour", token: token, body: try sealTour(try JSONSerialization.data(withJSONObject: tour), key: key, id: id))
+        let keyData = key.withUnsafeBytes { Data($0) }
+        let record = LinkRecord(id: id, relay: relay.absoluteString, token: token, key: b64url(keyData),
+                                privateKey: mine.rawRepresentation.base64EncodedString(), session: "", frames: [], created: Date(),
+                                url: "\(relay.absoluteString)/r/\(id)#k=\(b64url(keyData))")
+        try save(record)
+        return record
+    }
+
     // MARK: Pulling
 
     /// Fetches what guests sent to every link, turns each into a session in triage, and deletes it from the relay.
@@ -128,8 +154,14 @@ enum Links {
             for fid in list {
                 do {
                     let blob = try await call(relay, "GET", "/api/links/\(link.id)/feedback/\(fid)", token: link.token, body: nil)
-                    let dir = try session(from: try openFeedback(blob, link: link), link: link)
-                    _ = await Process.run(dir: dir, log: log)
+                    let plain = try open(blob, link: link)
+                    let dir: URL
+                    if let rec = try? JSONDecoder().decode(Recording.self, from: plain), rec.kind == "recording" {
+                        dir = try await received(rec, link: link)
+                    } else {
+                        dir = try session(from: try JSONDecoder().decode(Feedback.self, from: plain), link: link)
+                        _ = await Process.run(dir: dir, log: log)
+                    }
                     out.append(dir)
                     log("\(link.id): \(dir.lastPathComponent) from \(Items.items(in: dir, state: nil).items.first?.author?.name ?? "a guest")")
                 } catch {
@@ -140,6 +172,19 @@ enum Links {
             }
         }
         return out
+    }
+
+    /// A recording a guest made with Point and Yap on their own Mac (Join.send): its files go through the same checks as
+    /// --import, and it waits in triage from before it is listed.
+    static func received(_ rec: Recording, link: LinkRecord) async throws -> URL {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("pointandyap-recv-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp.appendingPathComponent("frames"), withIntermediateDirectories: true)
+        for (path, b64) in rec.files where path == "events.json" || path == "transcript.json" || Import.frameName(path) {
+            guard let data = Data(base64Encoded: b64) else { continue }
+            try data.write(to: tmp.appendingPathComponent(path))
+        }
+        return try await Import.run(tmp, author: rec.name, via: "link", triage: true)
     }
 
     /// A guest's feedback as a session folder: the shared screenshots (full size, from the recording here), the guest's
@@ -210,6 +255,10 @@ enum Links {
     /// Feedback is: the guest's one-time P-256 public key (65 bytes), then AES-GCM (12-byte nonce, ciphertext, tag) under
     /// HKDF-SHA256(ECDH(guest, this Mac), salt: link key, info: "pointandyap feedback <id>"), the public key as AAD.
     static func openFeedback(_ blob: Data, link: LinkRecord) throws -> Feedback {
+        try JSONDecoder().decode(Feedback.self, from: try open(blob, link: link))
+    }
+
+    static func open(_ blob: Data, link: LinkRecord) throws -> Data {
         guard blob.count > 65 + 12 + 16, let keyData = unb64url(link.key), let raw = Data(base64Encoded: link.privateKey) else {
             throw Failure.refused("too short")
         }
@@ -217,8 +266,11 @@ enum Links {
         let epk = Data(blob.prefix(65))
         let shared = try mine.sharedSecretFromKeyAgreement(with: try P256.KeyAgreement.PublicKey(x963Representation: epk))
         let k = shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: keyData, sharedInfo: Data("pointandyap feedback \(link.id)".utf8), outputByteCount: 32)
-        let plain = try AES.GCM.open(try AES.GCM.SealedBox(combined: Data(blob.dropFirst(65))), using: k, authenticating: epk)
-        return try JSONDecoder().decode(Feedback.self, from: plain)
+        return try AES.GCM.open(try AES.GCM.SealedBox(combined: Data(blob.dropFirst(65))), using: k, authenticating: epk)
+    }
+
+    static func openTour(_ blob: Data, key: Data, id: String) throws -> Data {
+        try AES.GCM.open(try AES.GCM.SealedBox(combined: blob), using: SymmetricKey(data: key), authenticating: Data("pointandyap tour \(id)".utf8))
     }
 
     /// What the page does, for tests.
@@ -277,7 +329,8 @@ enum Links {
     }
 }
 
-/// `PointAndYap --share [<session>] [--relay <url>] [--from <name>] [--title <text>]`, `--pull`, `--links`, `--revoke <id>`, `--accept <item id>...`.
+/// `PointAndYap --share [<session>] [--relay <url>] [--from <name>] [--title <text>]`, `--invite [--from <name>]`, `--pull`,
+/// `--links`, `--revoke <id>`, `--accept <item id>...`; a guest: `--join <link> [--as <name>]`, `--send [<session>]`, `--leave`.
 enum LinksCLI {
     static func run(_ args: [String]) {
         func value(_ flag: String) -> String? { args.firstIndex(of: flag).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
@@ -293,6 +346,24 @@ enum LinksCLI {
                     guard let session = MCPServer.dir(name) else { throw Links.Failure.refused("no recording \(name ?? "yet")") }
                     let r = try await Links.share(session, relay: relay, from: value("--from"), title: value("--title"))
                     print("Link for \(r.session) (\(r.frames.count) screenshot\(r.frames.count == 1 ? "" : "s")); anyone with it can point and talk on them:\n\(r.url)")
+                } else if args.contains("--invite") {
+                    guard let relay = Links.relay(value("--relay")) else { throw Links.Failure.refused("no relay: --relay <url> or POINTANDYAP_RELAY") }
+                    let r = try await Links.invite(relay: relay, from: value("--from"))
+                    print("Invite. Whoever joins it with Point and Yap sends you their recordings:\n\(r.url)")
+                } else if let link = value("--join") {
+                    let j = try await Join.lookup(link)
+                    try Join.join(j)
+                    if let name = value("--as") { UserDefaults.standard.set(name, forKey: "shareName") }
+                    print("Joined: your recordings now go to \(j.to), not to your own agents. \(QueueCLI.binary) --leave stops it.")
+                } else if args.contains("--leave") {
+                    Join.leave()
+                    print("Left. Recordings stay here again.")
+                } else if args.contains("--send") {
+                    guard let j = Join.current() else { throw Links.Failure.refused("not joined to anyone: --join <link>") }
+                    let name = value("--send").flatMap { $0.hasPrefix("--") ? nil : $0 }
+                    guard let dir = MCPServer.dir(name) else { throw Links.Failure.refused("no recording \(name ?? "yet")") }
+                    try await Join.send(dir, to: j, as: value("--as") ?? Join.myName)
+                    print("Sent \(dir.lastPathComponent) to \(j.to).")
                 } else if args.contains("--pull") {
                     let got = await Links.pull { print("pointandyap: \($0)") }
                     print(got.isEmpty ? "Nothing new from review links." : "\(got.count) new, waiting for you in triage: \(QueueCLI.binary) --accept <id>")

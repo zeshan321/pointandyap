@@ -35,6 +35,32 @@ struct MainView: View {
                 .padding(.bottom, 16)
             }
 
+            if let j = state.invite {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("\(j.from ?? "Someone") wants your feedback").font(.geist(14, .medium)).foregroundStyle(Ink.primary)
+                    Text("While you are joined, each recording goes to \(j.from ?? "them"): what you say, where you point and the screenshots there, encrypted to their Mac. It does not go to your own agents.")
+                        .font(.geist(12)).foregroundStyle(Ink.muted).fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Spacer()
+                        Button("Not now") { state.answerInvite(false) }.buttonStyle(SmallButton())
+                        Button("Join") { state.answerInvite(true) }.buttonStyle(SmallButton(dark: true))
+                    }
+                }
+                .padding(14)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Ink.field))
+                .padding(.bottom, 16)
+            } else if let j = state.joined {
+                HStack {
+                    Circle().fill(Ink.red).frame(width: 7, height: 7)
+                    Text("Recordings go to \(j.to)").font(.geist(13)).foregroundStyle(Ink.primary)
+                    Spacer()
+                    Button("Stop") { state.leave() }.buttonStyle(SmallButton()).help("Keep recordings on this Mac again")
+                }
+                .padding(.horizontal, 12).frame(height: 44)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Ink.field))
+                .padding(.bottom, 16)
+            }
+
             if state.showWelcome && state.allowed && state.phase == .idle {
                 WelcomeCard(state: state).padding(.bottom, 16)
             }
@@ -186,14 +212,16 @@ struct SessionRowView: View {
                     .font(.geist(11)).foregroundStyle(Ink.muted)
             }
             Spacer(minLength: 8)
-            if !hover { StatusPill(status: row.status, by: row.by) }
+            if !hover { StatusPill(status: row.status, by: row.by, note: row.note) }
             if hover {
                 Button { state.open(row) } label: { Image(systemName: "folder") }.buttonStyle(SmallButton()).help("Open the folder")
                 if row.author == nil {
                     Button { state.share(row) } label: { Image(systemName: "link") }.buttonStyle(SmallButton())
                         .help("Copy a review link: others point and talk on these screenshots, and it comes back here")
                 }
-                if row.status == "triage" {
+                if row.status == "triage", row.by?.hasPrefix("sending to") == true {
+                    // Waiting to go to whoever invited this Mac.
+                } else if row.status == "triage" {
                     Button("Dismiss") { state.toggleDone(row) }.buttonStyle(SmallButton())
                     Button("Accept") { state.accept(row) }.buttonStyle(SmallButton(dark: true))
                         .help("Put it in the queue for your agents")
@@ -245,8 +273,11 @@ struct PillView: View {
 struct StatusPill: View {
     let status: String
     let by: String?
+    var note: String? = nil
     var body: some View {
         switch status {
+        case "triage" where by?.hasPrefix("sending to") == true: pill("Sending…", 0x3A3C41, 0xF3F3F5, 0xE3E4E7)
+        case "done" where by == "you" && note?.hasPrefix("Sent to ") == true: pill(note!, 0x2F7A4B, 0xF1FAF4, 0xCFE8D8)
         case "open": pill("To fix", 0x6B5414, 0xFFF7E0, 0xF3E3B5)
         case "in_progress": pill("In progress" + (by.map { " · \($0)" } ?? ""), 0x3A3C41, 0xF3F3F5, 0xE3E4E7)
         case "done": pill("Done", 0x2F7A4B, 0xF1FAF4, 0xCFE8D8)

@@ -25,6 +25,15 @@ async function load() {
   catch { $("title").textContent = "This link does not open"; $("lede").textContent = "The key in it does not match. Ask for the link again."; return; }
 
   const who = tour.from || "The person who sent this";
+  if (tour.invite) {
+    // An invite: feedback is made in Point and Yap itself, pointing at anything on the guest's own screen.
+    $("title").textContent = `${who} wants your feedback`;
+    $("lede").textContent = "Show them, don't type: point at things on your screen and talk. Point and Yap sends each recording to them, and only they can read it.";
+    $("inviteTo").textContent = tour.from || "them";
+    $("openApp").href = `pointandyap://join?link=${encodeURIComponent(location.href)}`;
+    show("invite");
+    return;
+  }
   $("title").textContent = tour.title || "Have a look";
   $("lede").textContent = `${who} wants your take on ${tour.frames.length === 1 ? "this screen" : `these ${tour.frames.length} screens`}. ` +
     `Point at things and say what you think. Only ${tour.from || "they"} will see it, not others with the link.`;

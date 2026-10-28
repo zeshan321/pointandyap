@@ -80,6 +80,12 @@ here, and resolves their pointer to the element this Mac recorded on that screen
 no agent can take, finish or release them until the user accepts (`--accept <id>`, or Accept in the window). `--links`,
 `--revoke <id>`. The window's link button on a row shares it.
 
+- Invites, the native way: `PointAndYap --invite [--from <name>]` makes a link with no screenshots. A guest with
+  Point and Yap opens it (`pointandyap://join?link=…`, the page's button; or `--join <link>`) and answers Join in the
+  window. While joined, each recording they make is held from their own agents, then sent (`Join.send`: events.json,
+  the transcript, the frames pointed at; never the audio), sealed to the inviter's Mac, and marked "Sent to …" there.
+  The inviter's `--pull` checks it like `--import` and puts it in triage, with the guest's own Accessibility elements.
+  "Recordings go to …" with Stop in the window (or `--leave`) ends it. Unsent ones are tried again every 30 s.
 - Crypto (`Links.swift`, `relay/public/seal.js`): the screenshots are AES-256-GCM under the link key, which lives in
   the #fragment and never reaches the relay. Feedback is sealed to this Mac: one P-256 key per link (kept in
   `~/Library/Application Support/PointAndYap/links/<id>.json`, mode 600), an ephemeral key per message, ECDH,

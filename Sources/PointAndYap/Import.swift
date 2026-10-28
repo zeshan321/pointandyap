@@ -11,7 +11,8 @@ enum Import {
 
     static let maxBytes = 500 << 20
 
-    static func run(_ src: URL, author: String?) async throws -> URL {
+    /// `triage`: from someone not at this Mac without the user asking for it, so no agent takes it before the user accepts.
+    static func run(_ src: URL, author: String?, via: String = "import", triage: Bool = false) async throws -> URL {
         let fm = FileManager.default
         var from = src
         var unzipped: URL?
@@ -43,12 +44,17 @@ enum Import {
         let known = Set(frames)
         e.frames = e.frames.filter { known.contains($0.file) }
         for i in e.points.indices where !(e.points[i].frame.map(known.contains) ?? true) { e.points[i].frame = nil }
-        e.author = Author(name: author ?? events.author?.name ?? "someone else", via: "import")
+        e.author = Author(name: author ?? events.author?.name ?? "someone else", via: via)
 
         let dst = fresh()
         try fm.createDirectory(at: dst.appendingPathComponent("frames"), withIntermediateDirectories: true)
         for f in files where f != "events.json" { try fm.copyItem(at: root.appendingPathComponent(f), to: dst.appendingPathComponent(f)) }
         try JSONEncoder.pretty.encode(e).write(to: dst.appendingPathComponent("events.json"))
+        if triage {
+            var st = ItemState(source: "session")
+            st.items["1"] = .init(status: "triage", by: e.author?.name, at: Date(), note: nil)
+            Items.writeState(st, dst)
+        }
         _ = await Process.run(dir: dst, log: { _ in })
         return dst
     }
