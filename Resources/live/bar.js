@@ -640,7 +640,7 @@
       d.dataset.state = it.confirmed ? "ok" : it.status;
       d.classList.toggle("flash", S.flash === it.id);
       d.textContent = String(S.items.indexOf(it) + 1);
-      d.title = `${it.from}: ${it.title || "…"}`;
+      d.title = `${it.from}: ${it.said || it.title || "…"}${it.note ? `\n${it.by || "Agent"}: ${it.note}` : ""}`;
       // On the element's corner, so it never hides what it marks.
       d.style.transform = `translate(${Math.min(innerWidth - 22, r.right - 9)}px, ${Math.max(2, r.top - 9)}px)`;
     });
@@ -699,7 +699,7 @@
       const accept = S.role === "owner" && it.status === "triage";
       return `<li class="${S.focus === it.id ? "focus" : ""}">
         <div class="row"><span class="n">${n}</span><b>${esc(it.mine ? "You" : it.from)}</b>${it.private ? `<span class="priv" title="Only ${esc(S.owner)} and you see this">${ICON.lock}</span>` : ""}${it.part ? `<span class="part">${esc(it.part)}</span>` : ""}<span class="chip ${cls}">${esc(text)}</span></div>
-        <div class="said">${it.title ? `“${esc(it.title.replace(/[.,;:!?]+$/, ""))}…”` : ""}</div>
+        <div class="said">${it.said || it.title ? `“${esc(it.said || it.title)}”` : ""}</div>
         ${it.note && it.status === "done" ? `<div class="fix">${esc(it.note)}</div>` : ""}
         ${accept ? `<div class="check"><span>${esc(it.from)} asked for this.</span><button data-accept="${esc(it.id)}" class="dark">Accept</button></div>` : ""}
         ${check ? `<div class="check"><span>Is it right now?</span><button data-ok="${esc(it.id)}" class="dark">Looks right</button><button data-no="${esc(it.id)}">Not yet</button></div>` : ""}
@@ -743,7 +743,9 @@
     panel.hidden = (!S.panel && !checking) || S.small;
     let html = "";
     if (!panel.hidden && panel.classList.contains("compact")) {
-      html = `<div class="row"><span class="n">${S.items.indexOf(checking) + 1}</span><b>Done</b><span class="said">${esc(checking.note || "")}</span></div>
+      html = `<div class="row"><span class="n">${S.items.indexOf(checking) + 1}</span><b>Done</b>${checking.by ? `<span class="part">by ${esc(checking.by)}</span>` : ""}</div>
+        ${checking.note ? `<div class="fix">${esc(checking.note)}</div>` : ""}
+        <div class="asked">You asked: “${esc(checking.said || checking.title || "")}”</div>
         <div class="check"><span>Have a look. Is it right?</span><button data-ok="${esc(checking.id)}" class="dark">Looks right</button><button data-no="${esc(checking.id)}">Not yet</button></div>`;
     } else if (!panel.hidden) {
       if (S.asking?.welcome) {
@@ -853,7 +855,9 @@
     #ui.small { left: auto; right: 14px; transform: none; }
     #panel { width: min(380px, calc(100vw - 20px)); max-height: min(60vh, 520px); overflow: auto; background: #fff; color: #1d1f23; border: 1px solid #e3e4e7;
       border-radius: 14px; box-shadow: 0 10px 32px rgba(0,0,0,.16); padding: 14px; font-size: 13px; line-height: 1.45; }
-    #panel.compact { padding: 10px 12px; } #panel.compact .said { margin: 0 0 0 4px; color: #2f7a4b; } #panel.compact .check { margin: 6px 0 0; }
+    #panel.compact { padding: 10px 12px; } #panel.compact .check { margin: 6px 0 0; }
+    .asked { margin: 4px 0 0 24px; font-size: 12px; color: #8a8d94; }
+    .said, .fix, .asked { overflow-wrap: anywhere; white-space: pre-wrap; }
     .pin.flash { animation: flash .6s ease-in-out 6; } @keyframes flash { 50% { transform-origin: center; box-shadow: 0 0 0 8px rgba(48,164,108,.45); } }
     #panel h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; } #panel p { margin: 0 0 10px; color: #5c5f66; }
     .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }

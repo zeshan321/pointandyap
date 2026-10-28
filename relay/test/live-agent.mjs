@@ -31,7 +31,7 @@ if (process.env.TWO) {
       console.log("agent: got", id, JSON.stringify(said));
       if (/button/i.test(said)) {
         writeFileSync(file, code.replace("<button onClick", '<button style={{ background: "#1f8a4c", color: "#fff" }} onClick'));
-        console.log("agent:", (await tool("mark_done", { ids: [id], note: "The counter button is green now" })).content[0].text); left.delete("button");
+        console.log("agent:", (await tool("mark_done", { ids: [id], note: "The counter button is green now: a green background with white text in src/App.tsx, and the hover state darkens it a little so it still reads as a button." })).content[0].text); left.delete("button");
       } else if (/heading/i.test(said)) {
         writeFileSync(file, code.replace(/<h1>[^<]*<\/h1>/, "<h1>Hello Dana</h1>"));
         console.log("agent:", (await tool("mark_done", { ids: [id], note: "The heading says Hello Dana" })).content[0].text); left.delete("heading");

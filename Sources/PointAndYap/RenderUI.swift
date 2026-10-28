@@ -45,6 +45,12 @@ enum RenderUI {
         write(MainView(state: s), "welcome.png", dir)
         s.showWelcome = false
         write(VStack(spacing: 0) { ForEach(s.sessions) { SessionRowView(row: $0, state: s); Divider() } }.frame(width: 352).padding(24).background(Color.white), "rows.png", dir)
+        // A real recording, opened: POINTANDYAP_RENDER_SESSION=<session folder>.
+        if let p = ProcessInfo.processInfo.environment["POINTANDYAP_RENDER_SESSION"] {
+            let d = URL(fileURLWithPath: p)
+            let row = SessionRow(dir: d, date: Date(), duration: 7, points: 3, title: "This counter button should be green. And the", status: "done", by: "claude-code", requests: 2)
+            write(SessionRowView(row: row, state: s, open: true).frame(width: 352).padding(24).background(Color.white), "row-open.png", dir)
+        }
         let n = AppState(); n.mic = true
         write(MainView(state: n), "window-access.png", dir)
         let st = AppState(); st.showSettings = true

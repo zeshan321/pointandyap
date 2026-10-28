@@ -381,6 +381,7 @@ actor Room {
     private var tracked: [Tracked] = []
     private var last: [String: String] = [:]   // per peer: the items message last sent
     private var anchors: [String: [LiveRecording.Anchor?]] = [:]   // per recording, once written down: each request's pin
+    private var said: [String: String] = [:]   // per item: everything said for it
     private var colorIndex = 0
     static let colors = ["#e5484d", "#3e63dd", "#30a46c", "#f76b15", "#8e4ec6", "#12a594", "#d6409f", "#ab6400"]
 
@@ -504,10 +505,12 @@ actor Room {
                 anchors[t.dir.lastPathComponent] = items.map { Live.anchor($0, events) ?? ($0.n == 1 ? t.anchor : nil) }
             }
             let marks = anchors[t.dir.lastPathComponent] ?? []
+            for i in items where said[i.id] == nil { said[i.id] = Live.said(i, t.dir) }
             return items.map { item in
                 var o = base
                 o["id"] = item.id
                 o["title"] = item.title
+                o["said"] = said[item.id] ?? item.title
                 o["status"] = item.status
                 if items.count > 1 { o["part"] = "\(item.n) of \(items.count)" }
                 if let by = item.by, item.status == "in_progress" || item.status == "done" { o["by"] = Live.agentName(by) }

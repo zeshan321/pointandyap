@@ -205,13 +205,63 @@ struct SessionRowView: View {
     let row: SessionRow
     @ObservedObject var state: AppState
     @State private var hover = false
+    @State private var open = false
+    @State private var details: [(n: Int, said: String, status: String, by: String?, note: String?)] = []
+
+    init(row: SessionRow, state: AppState, open: Bool = false) {
+        self.row = row
+        self.state = state
+        _open = State(initialValue: open)
+        _details = State(initialValue: open ? Self.details(row.dir) : [])
+    }
 
     private static let time: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "d MMM, HH:mm"; return f
     }()
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            summary
+            if open { detail }
+        }
+    }
+
+    /// Everything that was said, request by request, and each fix's note in full.
+    private var detail: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(details, id: \.n) { d in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        if details.count > 1 { Text("\(d.n)").font(.geist(11, .medium)).foregroundStyle(Ink.faint) }
+                        Text("“\(d.said)”").font(.geist(12)).foregroundStyle(Ink.primary)
+                            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        Spacer(minLength: 0)
+                        if details.count > 1 { StatusPill(status: d.status, by: d.by) }
+                    }
+                    if let note = d.note {
+                        Text("\(d.by.map { "\(Live.agentName($0)): " } ?? "")\(note)").font(.geist(12)).foregroundStyle(Color(hex: 0x2F7A4B))
+                            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                    }
+                }
+            }
+            if details.isEmpty { Text("Nothing was said.").font(.geist(12)).foregroundStyle(Ink.muted) }
+        }
+        .padding(.leading, 18).padding(.bottom, 12)
+    }
+
+    private func load() { details = Self.details(row.dir) }
+
+    private static func details(_ dir: URL) -> [(n: Int, said: String, status: String, by: String?, note: String?)] {
+        Items.items(in: dir, state: Items.readState(dir)).items.map { ($0.n, Live.said($0, dir), $0.status, $0.by, $0.note) }
+    }
+
+    private var summary: some View {
         HStack(spacing: 10) {
+            Button { open.toggle(); if open { load() } } label: {
+                Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(Ink.faint)
+                    .rotationEffect(.degrees(open ? 90 : 0)).frame(width: 12, height: 24).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).help(open ? "Hide" : "Show everything said, and the notes")
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.title).font(.geist(13)).foregroundStyle(Ink.primary).lineLimit(1)
                 Text("\(Self.time.string(from: row.date)) · \(row.duration) s\(row.requests > 1 ? " · \(row.requests) requests" : "")\(row.author.map { " · from \($0)" } ?? "")")
@@ -240,6 +290,7 @@ struct SessionRowView: View {
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         .onTapGesture { state.copy(row) }
+        .onChange(of: row) { _, _ in if open { load() } }
         .help(row.note.map { "Note: \($0)" } ?? "Click to copy it for an agent")
     }
 }
