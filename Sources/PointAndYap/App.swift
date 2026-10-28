@@ -136,7 +136,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// pointandyap://join?link=<an invite>: asks in the window before anything is sent anywhere.
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls where url.scheme == "pointandyap" && url.host == "join" {
-            if case .recording = state.phase {} else { window.makeKeyAndOrderFront(nil); NSApp.activate() }
+            // A link that launches the app arrives before applicationDidFinishLaunching makes the window, which then shows itself.
+            if case .recording = state.phase {} else { window?.makeKeyAndOrderFront(nil); NSApp.activate() }
             Task { await state.lookInvite(url.absoluteString) }
         }
     }
