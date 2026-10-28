@@ -14,6 +14,7 @@ struct SessionRow: Identifiable, Equatable {
     var note: String?
     var noSpeech = false
     var author: String?   // someone else's recording
+    var confirmed = false // they looked at the fix and said yes (live review)
 }
 
 @MainActor
@@ -57,6 +58,66 @@ final class AppState: ObservableObject {
         joined = nil
         say("Recordings stay here again")
     }
+
+    // MARK: Live review
+
+    /// The port picker is open (Go live).
+    @Published var pickingPort = false
+    @Published var devServers: [DevServer] = []
+    @Published var live: LiveSession?
+    @Published var liveStarting = false
+    /// Who is in the live link now (guests' names).
+    @Published var livePeople: [String] = []
+
+    struct DevServer: Identifiable, Equatable { var port: Int; var name: String; var id: Int { port } }
+
+    func pickPort() {
+        pickingPort.toggle()
+        guard pickingPort else { return }
+        Task.detached {
+            let found = DevServers.find().map { DevServer(port: $0.port, name: $0.name) }
+            await MainActor.run { self.devServers = found }
+        }
+    }
+
+    /// Shares localhost:<port> through a link, and copies it.
+    func goLive(_ port: Int) {
+        guard live == nil, !liveStarting else { return }
+        let name = UserDefaults.standard.string(forKey: "shareName") ?? NSFullUserName().split(separator: " ").first.map(String.init) ?? "Me"
+        let session = LiveSession(upstream: port, owner: name)
+        session.onChange = { [weak self, weak session] in
+            Task { @MainActor in
+                guard let self, let session else { return }
+                self.livePeople = await session.room.names
+                self.loadSessions()
+            }
+        }
+        liveStarting = true
+        pickingPort = false
+        Task {
+            do {
+                try await session.start()
+                live = session
+                copy(session.guestLink)
+                Sounds.play("done")
+                say("Live link copied")
+            } catch {
+                session.stop()
+                say("Couldn't go live: \(error)")
+            }
+            liveStarting = false
+        }
+    }
+
+    func endLive() {
+        live?.stop()
+        live = nil
+        livePeople = []
+        say("Live link ended")
+    }
+
+    func copyLiveLink() { if let l = live?.guestLink { copy(l); say("Copied") } }
+    func openLiveAsMe() { if let l = live?.ownerLink, let u = URL(string: l) { NSWorkspace.shared.open(u) } }
 
     /// The coding agents found on this Mac, while the first-run question is open.
     @Published var askAgents: [String] = []
@@ -265,7 +326,7 @@ final class AppState: ObservableObject {
             let item = Items.items(in: dir, state: Items.readState(dir)).items.first
             return SessionRow(dir: dir, date: e.started, duration: Int(e.duration.rounded()), points: e.points.count,
                               title: title, status: item?.status ?? "", by: item?.by, note: item?.note,
-                              noSpeech: title == "No speech", author: e.author?.name)
+                              noSpeech: title == "No speech", author: e.author?.name, confirmed: item?.confirmed != nil)
         }) {
             rows.append(row)
             if rows.filter({ !$0.noSpeech }).count == 20 { break }

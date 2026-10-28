@@ -16,6 +16,10 @@ struct MainView: View {
             HStack(spacing: 10) {
                 AppTitle()
                 Spacer()
+                if state.live == nil {
+                    Button { state.pickPort() } label: { Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 13)) }
+                        .buttonStyle(SmallButton()).help("Go live: share the app you're building on localhost, and others point and talk on it")
+                }
                 Button { state.showSettings = true } label: { Image(systemName: "gearshape").font(.system(size: 13)) }
                     .buttonStyle(SmallButton()).help("Settings (⌘,)")
             }
@@ -60,6 +64,8 @@ struct MainView: View {
                 .background(RoundedRectangle(cornerRadius: 10).fill(Ink.field))
                 .padding(.bottom, 16)
             }
+
+            if state.live != nil || state.pickingPort || state.liveStarting { LiveCard(state: state).padding(.bottom, 16) }
 
             if state.showWelcome && state.allowed && state.phase == .idle {
                 WelcomeCard(state: state).padding(.bottom, 16)
@@ -212,7 +218,7 @@ struct SessionRowView: View {
                     .font(.geist(11)).foregroundStyle(Ink.muted)
             }
             Spacer(minLength: 8)
-            if !hover { StatusPill(status: row.status, by: row.by, note: row.note) }
+            if !hover { StatusPill(status: row.status, by: row.by, note: row.note, confirmed: row.confirmed ? row.author : nil) }
             if hover {
                 Button { state.open(row) } label: { Image(systemName: "folder") }.buttonStyle(SmallButton()).help("Open the folder")
                 if row.author == nil {
@@ -274,8 +280,10 @@ struct StatusPill: View {
     let status: String
     let by: String?
     var note: String? = nil
+    var confirmed: String? = nil   // who checked the fix
     var body: some View {
         switch status {
+        case "done" where confirmed != nil: pill("\(confirmed!) confirmed", 0x2F7A4B, 0xF1FAF4, 0xCFE8D8)
         case "triage" where by?.hasPrefix("sending to") == true: pill("Sending…", 0x3A3C41, 0xF3F3F5, 0xE3E4E7)
         case "done" where by == "you" && note?.hasPrefix("Sent to ") == true: pill(note!, 0x2F7A4B, 0xF1FAF4, 0xCFE8D8)
         case "open": pill("To fix", 0x6B5414, 0xFFF7E0, 0xF3E3B5)
@@ -291,5 +299,59 @@ struct StatusPill: View {
             .padding(.horizontal, 8).padding(.vertical, 3)
             .background(Capsule().fill(Color(hex: bg)))
             .overlay(Capsule().strokeBorder(Color(hex: line), lineWidth: 1))
+    }
+}
+
+/// Go live: pick the dev server, then the link, who is in it, and End.
+struct LiveCard: View {
+    @ObservedObject var state: AppState
+    @State private var port = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let live = state.live {
+                HStack(spacing: 8) {
+                    Circle().fill(Ink.red).frame(width: 7, height: 7)
+                    Text("Live: localhost:\(String(live.upstream))").font(.geist(13, .medium)).foregroundStyle(Ink.primary)
+                    Spacer()
+                    Button("Copy link") { state.copyLiveLink() }.buttonStyle(SmallButton())
+                    Button("End") { state.endLive() }.buttonStyle(SmallButton(dark: true))
+                }
+                Text(state.livePeople.isEmpty ? "Nobody yet. Send the link: they use your app in their browser, point and talk."
+                     : "In it: \(state.livePeople.joined(separator: ", ")). Their requests show up below.")
+                    .font(.geist(12)).foregroundStyle(Ink.muted).fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Toggle("Send their requests straight to agents", isOn: Binding(get: { live.trusted }, set: { live.trusted = $0; state.objectWillChange.send() }))
+                        .toggleStyle(.switch).controlSize(.mini).font(.geist(12)).foregroundStyle(Ink.muted)
+                    Spacer()
+                    Button("Open as me") { state.openLiveAsMe() }.buttonStyle(.plain).font(.geist(12)).foregroundStyle(Ink.muted).underline()
+                }
+            } else if state.liveStarting {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Making the link…").font(.geist(13)).foregroundStyle(Ink.primary)
+                }
+            } else {
+                Text("Share the app you're building").font(.geist(14, .medium)).foregroundStyle(Ink.primary)
+                Text("Anyone with the link uses it in their browser, points and talks. Your agent can fix things while they watch.")
+                    .font(.geist(12)).foregroundStyle(Ink.muted).fixedSize(horizontal: false, vertical: true)
+                if !state.devServers.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(state.devServers.prefix(4)) { d in
+                            Button("\(String(d.port)) · \(d.name)") { state.goLive(d.port) }.buttonStyle(SmallButton())
+                        }
+                    }
+                }
+                HStack(spacing: 8) {
+                    TextField("Port, e.g. 3000", text: $port).textFieldStyle(.roundedBorder).font(.geist(13)).frame(width: 130)
+                        .onSubmit { if let p = Int(port) { state.goLive(p) } }
+                    Spacer()
+                    Button("Cancel") { state.pickingPort = false }.buttonStyle(SmallButton())
+                    Button("Go live") { if let p = Int(port) { state.goLive(p) } }.buttonStyle(SmallButton(dark: true)).disabled(Int(port) == nil)
+                }
+            }
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Ink.field))
     }
 }

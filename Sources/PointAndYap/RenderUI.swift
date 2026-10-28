@@ -31,6 +31,15 @@ enum RenderUI {
         ]
         write(MainView(state: s), "window-joined.png", dir)
         s.joined = nil
+        s.pickingPort = true
+        s.devServers = [.init(port: 5173, name: "node"), .init(port: 3000, name: "node")]
+        write(MainView(state: s), "window-golive.png", dir)
+        s.pickingPort = false
+        s.live = LiveSession(upstream: 5173, owner: "Zeshan")
+        s.livePeople = ["Dana", "Sam"]
+        s.sessions = [SessionRow(dir: dir.appendingPathComponent("g"), date: Date(), duration: 6, points: 2, title: "This counter button should be green", status: "triage", by: "Dana", author: "Dana")]
+        write(MainView(state: s), "window-live.png", dir)
+        s.live = nil
         s.updateReady = nil
         s.showWelcome = true
         write(MainView(state: s), "welcome.png", dir)

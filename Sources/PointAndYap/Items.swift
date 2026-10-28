@@ -14,12 +14,16 @@ struct Item {
     var by: String?
     var note: String?
     var author: Author?       // nil: the user of this Mac
+    var confirmed: Date? = nil
 }
 
 struct ItemState: Codable {
     var source: String        // "session"; older builds wrote "timeline"
     var items: [String: Entry] = [:]
-    struct Entry: Codable { var status: String; var by: String?; var at: Date; var note: String? }
+    struct Entry: Codable {
+        var status: String; var by: String?; var at: Date; var note: String?
+        var confirmed: Date? = nil   // the person who asked looked at the fix and said yes (Live)
+    }
 }
 
 enum Items {
@@ -38,7 +42,7 @@ enum Items {
                 // "taken" is the older name of in_progress.
                 let working = e.status == "taken" || e.status == "in_progress"
                 out[i].status = working ? (Date().timeIntervalSince(e.at) > lease ? "open" : "in_progress") : e.status
-                out[i].by = e.by; out[i].note = e.note; out[i].at = e.at
+                out[i].by = e.by; out[i].note = e.note; out[i].at = e.at; out[i].confirmed = e.confirmed
             }
         }
         return (source, out)
@@ -66,7 +70,15 @@ enum Items {
             lines.append(pointLine(p, dir, &crops))
         }
         if lines.count == 3 { lines.removeLast(2) }
+        if let pg = events.page {
+            lines += ["", "Seen at \(pg.url) in \(pg.browser), \(pg.viewport)\(pg.title.map { ", page \"\($0)\"" } ?? "")."]
+            if !pg.errors.isEmpty { lines += ["Errors in the page while they talked (newest last):"] + pg.errors.suffix(6).map { "- \($0)" } }
+        }
         let title = words.prefix(12).map(\.text).joined(separator: " ")
+        if let f = events.followUp {
+            let who = events.author?.name ?? "The user"
+            lines.insert("Follow-up to \(f.id) (\"\(f.said)\"), which \(f.by ?? "an agent") marked done\(f.note.map { " with the note \"\($0)\"" } ?? ""). \(who) checked it and says it is not right yet:", at: 0)
+        }
         if let a = events.author { lines.insert("From \(a.name) (\(a.via)), not the user: \(thirdParty)", at: 0) }
         return Item(id: "", session: "", n: 1, title: title, body: lines.joined(separator: "\n"), crops: crops, status: "open", at: nil,
                     author: events.author)
@@ -160,6 +172,18 @@ enum Items {
             }
             return (changed, missing)
         }
+    }
+
+    /// Open items as soon as there are any, taken for `agent`; empty after `timeout` seconds. For live reviews, where
+    /// people watch their page while an agent works through what they say.
+    static func wait(timeout: TimeInterval, limit: Int, agent: String) -> [Item] {
+        let end = Date().addingTimeInterval(timeout)
+        repeat {
+            let got = openItems(limit: limit, take: true, agent: agent)
+            if !got.isEmpty { return got }
+            Thread.sleep(forTimeInterval: 1)
+        } while Date() < end
+        return []
     }
 
     /// Every item, oldest first, for an overview.

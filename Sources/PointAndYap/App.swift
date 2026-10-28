@@ -13,6 +13,10 @@ struct Main {
         if ["--share", "--invite", "--pull", "--links", "--revoke", "--accept", "--join", "--leave", "--send"].contains(where: args.contains) {
             LinksCLI.run(args); return
         }
+        // Live review of the app on a localhost port: PointAndYap --live <port> [--trust] [--private] [--open]
+        if args.contains("--live") { LiveCLI.run(args); return }
+        // Waits for an open item and takes it (live fixes from a shell): PointAndYap --wait [seconds]
+        if args.contains("--wait") { QueueCLI.wait(args); return }
         // Local MCP server for coding agents: PointAndYap --mcp
         if args.contains("--mcp") { MCPServer.run(); return }
         // Headless: PointAndYap --process <session dir>
@@ -141,6 +145,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             Task { await state.lookInvite(url.absoluteString) }
         }
     }
+
+    /// A live link ends with the app (its tunnel is a child process).
+    func applicationWillTerminate(_ note: Notification) { state.live?.stop() }
 
     func applicationDidBecomeActive(_ note: Notification) { state.refreshAccess(); state.loadSessions() }
 

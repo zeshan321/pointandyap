@@ -120,6 +120,50 @@ live testing with the permissions); for now a guest's point resolves only where 
 own screen, and each recording comes to the owner's queue, held in triage. The screenshot page stays as the fallback
 for guests without a Mac.
 
+## Revised: share the real thing, not a picture of it
+
+Trying phase 1 showed two things. People try to click screenshots (the first test clicked a frozen picture eight
+times), and a guest who has to install an app and grant three permissions before saying a word mostly never does. So
+the plan was re-sequenced around two rules: **a guest needs nothing but a link and a browser**, and **what they open is
+the real, running thing**.
+
+### Live 1: Share localhost · *built*
+
+`PointAndYap --live 5173` (or Go live in the window) puts a link in front of the dev server: a free Cloudflare quick
+tunnel to a proxy on this Mac that admits only the link's browsers and puts a review bar into every page. Guests use
+the real app (log in, open menus, on a phone) and point and talk on it. Because it is the dev server and not a picture,
+each point carries what a screenshot never could: the **source file and line** (React 18/19, Vue, Svelte in
+development; mapped through source maps), the component chain and selector, the route, their browser and screen size,
+the page's console errors and failed requests, and their screen as they saw it (their DOM, redrawn on this Mac, so no
+screen-sharing prompt). Items are the same session folders as before, in triage unless the link trusts guests.
+
+### Live 2: Live sessions with live fixes · *built*
+
+Everyone in a link sees who is there, who is talking, each other's cursors (placed on the same element, whatever the
+screen size) and a pin where each request was made. The room's queue moves on everyone's page: waiting to be accepted,
+queued, "claude-code is on it", done with the agent's note. Agents call `wait_for_items` and work while people watch;
+the dev server's hot reload changes the guest's page, the element they pointed at scrolls into view, and they answer
+**Looks right** (the item is confirmed) or **Not yet** (a follow-up recording that names the item and the agent's
+note). Privacy: a link can be private (each guest sees only their own requests) and any recording can be. At the end
+`get_review_summary` writes the review up for a pull request: who asked what, where in the code, what was done, and
+who confirmed it.
+
+Verified end to end (`relay/test/live-e2e.sh`, also through a real tunnel): a Chrome guest talks and clicks on a Vite +
+React app, the item names `src/App.tsx:21:9`, the owner accepts it, an MCP agent waits, edits that line and marks it
+done, the guest's button turns green without a reload (its state kept), and the guest confirms.
+
+Not built yet, in order: voice between people (for now the meeting's own call carries it; each guest's mic is still
+their own recording); a per-guest Trust from the window; the agent working on a `review/<id>` branch with one commit
+per item; frameworks that build without dev metadata (production builds get selectors and text, no source line).
+Risks: the tunnel carries the app's traffic in the clear to Cloudflare, as any tunnel does (the window and the README
+must say so); guests can reach the dev server's API routes; an app that hardcodes `http://localhost:…` URLs breaks for
+guests.
+
+### Next: native apps and the Simulator (was Phase 2)
+
+Window streaming for native apps and the iOS Simulator, with guest pointers landing on this Mac's real
+Accessibility elements, follows the same room: presence, cursors, items and confirmations are already in place.
+
 ### Phase 2: Live rooms (months 4–6)
 
 - Press Control three times (or Start a room): ScreenCaptureKit streams **one chosen window** (never the whole screen

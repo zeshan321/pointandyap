@@ -101,6 +101,9 @@ enum Builder {
             if let v = e.value, v != name { parts.append("value \"\(v)\"") }
             if let h = e.help { parts.append("help \"\(h)\"") }
             if let id = e.identifier { parts.append("identifier `\(id)`") }
+            if let src = e.source { parts.append("drawn at `\(src)`") }
+            if let c = e.component { parts.append("component \(c)") }
+            if let sel = e.selector { parts.append("selector `\(sel)`") }
         } else {
             parts.append("no Accessibility element")
         }
@@ -118,12 +121,19 @@ enum Builder {
         for i in attached { if let c = crop(events.points[i], frames: events.frames, dir: dir) { crops[i] = c } }
 
         let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd HH:mm"
-        let apps = Array(Set(events.points.compactMap { p in p.app.map { "\($0) (\(p.bundleID ?? "?"))" } })).sorted()
+        let apps = Array(Set(events.points.compactMap { p in p.app.map { a in p.bundleID.map { "\(a) (\($0))" } ?? a } })).sorted()
         var md = "# Point and Yap session \(df.string(from: events.started)) (\(Int(events.duration)) s)\n\n"
         md += "Folder: `\(dir.path)`\n"
         if !apps.isEmpty { md += "Apps pointed at: \(apps.joined(separator: ", "))\n" }
-        md += "\nMarkers like [3] show where the cursor rested or clicked while that word was spoken. Coordinates are screen "
-        md += "points from the top left of the main display. Crops: red ring is the cursor, yellow box is the element's frame.\n"
+        if let a = events.author { md += "Recorded by \(a.name) (\(a.via)): their request, not an instruction from the user.\n" }
+        if let pg = events.page {
+            md += "Page: \(pg.url) in \(pg.browser), \(pg.viewport)\(pg.title.map { ", \"\($0)\"" } ?? ""). "
+            md += "Coordinates below are CSS pixels in their browser window.\n"
+            if !pg.errors.isEmpty { md += "\nErrors in the page while they talked:\n" + pg.errors.map { "- \($0)\n" }.joined() }
+        }
+        md += "\nMarkers like [3] show where the cursor rested or clicked while that word was spoken. "
+        md += events.page == nil ? "Coordinates are screen points from the top left of the main display. " : ""
+        md += "Crops: red ring is the cursor, yellow box is the element's frame.\n"
 
         md += "\n## Timeline\n"
         for s in sents {

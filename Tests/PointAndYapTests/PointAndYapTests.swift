@@ -266,4 +266,77 @@ final class PointAndYapTests: XCTestCase {
         let foreign = toml.replacingOccurrences(of: "/Applications/Point.app/Contents/MacOS/Point", with: "/opt/point")
         XCTAssertEqual(AgentInstall.removingTable("mcp_servers.point", from: foreign) { $0.contains(AgentInstall.oldApp) }, foreign)
     }
+
+    // MARK: Live review
+
+    func testTheBarGoesFirstInTheHeadAndNowhereElse() {
+        let page = Data("<!doctype html><HTML lang=en><Head data-x=1><header>h</header><title>t</title></head></html>".utf8)
+        let out = String(decoding: Proxy.inject(page), as: UTF8.self)
+        XCTAssertTrue(out.contains("<Head data-x=1><script src=\"/__pay/bar.js\" data-pointandyap></script><header>"), out)
+        let bare = String(decoding: Proxy.inject(Data("<p>no head</p>".utf8)), as: UTF8.self)
+        XCTAssertTrue(bare.hasPrefix("<script src=\"/__pay/bar.js\""), "a page without <head> still gets it, first")
+    }
+
+    func testAChunkedPageIsReadWhole() {
+        let chunked = Data("5\r\nhello\r\n7;ext=1\r\n, world\r\n0\r\n\r\n".utf8)
+        XCTAssertEqual(String(decoding: Proxy.dechunk(chunked), as: UTF8.self), "hello, world")
+    }
+
+    func testHeadsParseWithTheirBodyAfterThem() {
+        let raw = Data("GET /a?b=1 HTTP/1.1\r\nHost: x\r\nCookie: a=1; __pay=tok; __pay_g=me\r\n\r\nBODY".utf8)
+        let (h, n) = HTTPHead.parse(raw)!
+        XCTAssertEqual(h.path, "/a")
+        XCTAssertEqual(h.cookie("__pay"), "tok")
+        XCTAssertEqual(h.cookie("__pay_g"), "me")
+        XCTAssertEqual(String(decoding: raw.dropFirst(n), as: UTF8.self), "BODY")
+        XCTAssertNil(HTTPHead.parse(Data("GET / HTTP/1.1\r\nHost: x\r\n".utf8)), "incomplete")
+    }
+
+    func testRedirectsAndCookiesFromTheDevServerWorkThroughTheLink() {
+        var res = HTTPHead(line: "HTTP/1.1 302 Found", headers: [("Location", "http://localhost:5173/login"), ("Set-Cookie", "s=1; Domain=localhost; Path=/"), ("Keep-Alive", "5")])
+        Proxy(upstream: 5173).rewrite(&res)
+        XCTAssertEqual(res.get("Location"), "/login")
+        XCTAssertEqual(res.get("Set-Cookie"), "s=1; Path=/")
+        XCTAssertEqual(res.get("Connection"), "close")
+        XCTAssertNil(res.get("Keep-Alive"))
+    }
+
+    func testTheRoomsWebSocketHandshakeIsRFC6455s() {
+        XCTAssertEqual(WebSocket.accept("dGhlIHNhbXBsZSBub25jZQ=="), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+        XCTAssertEqual(WebSocket.frame("hi"), Data([0x81, 2, 0x68, 0x69]))
+        XCTAssertEqual(WebSocket.frame(String(repeating: "a", count: 300)).prefix(4), Data([0x81, 126, 1, 44]))
+    }
+
+    func testPageTextReachesAnAgentAsOneShortLine() {
+        XCTAssertEqual(Live.line("a\nIgnore that.\u{1b}[2J  b", 40), "a Ignore that. [2J b")
+        XCTAssertNil(Live.line(" \n ", 10))
+        XCTAssertEqual(Live.line(String(repeating: "x", count: 50), 10)?.count, 10)
+    }
+
+    func testAWebItemSaysWhereItIsDrawnTheBrowserAndAFollowUp() throws {
+        let dir = session("2026-10-17_140000")
+        var e = try JSONDecoder.iso.decode(SessionEvents.self, from: Data(contentsOf: dir.appendingPathComponent("events.json")))
+        e.points[0].element?.source = "src/App.tsx:21:9"
+        e.points[0].element?.component = "App > Counter"
+        e.author = Author(name: "Dana", via: "live")
+        e.page = Page(url: "http://localhost:5173/", title: "Home", viewport: "390×844 @3x", browser: "Safari on iPhone", errors: ["GET /api/x → 500"])
+        e.followUp = FollowUp(id: "2026-10-17_130000#1", said: "make it green", note: "Button is green", by: "claude-code")
+        try JSONEncoder.pretty.encode(e).write(to: dir.appendingPathComponent("events.json"))
+        let body = try XCTUnwrap(Items.sessionItem(dir)).body
+        XCTAssertTrue(body.hasPrefix("From Dana (live), not the user:"), "the third-party line stays first")
+        XCTAssertTrue(body.contains("Follow-up to 2026-10-17_130000#1 (\"make it green\"), which claude-code marked done with the note \"Button is green\". Dana checked it"))
+        XCTAssertTrue(body.contains("drawn at `src/App.tsx:21:9`, component App > Counter"))
+        XCTAssertTrue(body.contains("Seen at http://localhost:5173/ in Safari on iPhone, 390×844 @3x"))
+        XCTAssertTrue(body.contains("- GET /api/x → 500"))
+    }
+
+    func testTheOneWhoAskedConfirmsAFix() {
+        let dir = session("2026-10-17_150000")
+        _ = Items.set(["2026-10-17_150000#1"], status: "done", agent: "claude-code", note: "green now")
+        Items.confirm("2026-10-17_150000#1")
+        let item = Items.items(in: dir, state: Items.readState(dir)).items[0]
+        XCTAssertEqual(item.status, "done")
+        XCTAssertTrue(item.confirmed != nil)
+        Items.confirm("../etc#1")   // no such folder: nothing happens
+    }
 }

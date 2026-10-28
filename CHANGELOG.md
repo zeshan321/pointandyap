@@ -7,6 +7,14 @@
 - Review links (needs a relay, see DEVELOPMENT.md): share a recording's screenshots as a link; anyone can point and
   talk (or type) on them in a browser, end-to-end encrypted to your Mac. What they send comes back as recordings with
   their name, transcribed on your Mac, and waits in To accept until you put it in the queue.
+- Live review: `PointAndYap --live <port>` (or Go live in the window) shares the app running on your localhost through
+  a free Cloudflare quick tunnel (needs `cloudflared`, no account). Whoever has the link uses the real app in their
+  browser with a review bar on top: they point and talk (Talk, or ⌥ twice), and each recording comes to your queue with
+  the source file and line of what they pointed at (React, Vue, Svelte in development), the page's errors, their
+  browser and screen size, and a crop of their screen redrawn on your Mac. Everyone in the link sees each other's
+  cursors and the requests as they move. Agents call `wait_for_items` to fix things while people watch; hot reload
+  shows the fix, and the person who asked answers "Looks right" or "Not yet" (a follow-up item). `get_review_summary`
+  writes the review up for a pull request.
 - Invites: someone with Point and Yap joins your invite link, and every recording they make (Control twice, point,
   talk) comes to your queue instead of theirs, with their name, until they press Stop.
 

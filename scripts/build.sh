@@ -24,6 +24,7 @@ cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 cp Resources/Fonts/* "$APP/Contents/Resources/Fonts/"
 cp -R Resources/skill "$APP/Contents/Resources/"
 cp -R Resources/Sounds "$APP/Contents/Resources/"
+cp -R Resources/live "$APP/Contents/Resources/"
 mkdir -p "$APP/Contents/Resources/Welcome"
 cp Resources/Welcome/welcome.mp4 Resources/Welcome/welcome-poster.png "$APP/Contents/Resources/Welcome/"
 # Sparkle (updates), signed from the inside out as its documentation asks for apps built outside Xcode.

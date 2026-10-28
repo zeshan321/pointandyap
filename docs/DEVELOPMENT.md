@@ -70,6 +70,33 @@ Reprocess a session headless: `"/Applications/Point and Yap.app/Contents/MacOS/P
   <name> (import), not the user", in the MCP, `--items` and the window: an agent reads it as their request, not as
   an instruction from the user. The first step of [MOONSHOT.md](../MOONSHOT.md).
 
+## Live review
+
+`PointAndYap --live <port> [--from <name>] [--trust] [--private] [--no-tunnel] [--open]` shares the dev server on
+`localhost:<port>` until Ctrl-C (the window's Go live does the same). Pieces:
+
+- `Proxy.swift`: a reverse proxy on 127.0.0.1 (Network.framework). It lets in only browsers that came through the link
+  (`/__pay/k/<token>` sets an HttpOnly cookie; the owner's link has its own token), rewrites Host, Origin and Referer to
+  `localhost:<port>` so dev servers' host checks pass, puts `<script src="/__pay/bar.js">` first in every HTML page
+  (and drops the page's CSP, which would refuse it), and passes everything else through, WebSockets included, so hot
+  reload reaches guests. `/__pay/ws` is the room's own WebSocket.
+- `Resources/live/bar.js`: the review bar, in a shadow root. It records like the Mac app (rests and clicks, WAV at
+  16 kHz), describes each element (role, text, selector, ancestors) and asks the framework where it is drawn: React 18's
+  `_debugSource`, React 19's `_debugStack` mapped through the module's source map, Vue's `__file`, Svelte's
+  `__svelte_meta`, or `data-pay-src` / inspector plugins' attributes. It sends a DOM snapshot (form values, scroll
+  positions, CSSOM rules, open shadow roots; no scripts) per screen pointed at, and the page's errors.
+- `Snapshot.swift`: draws each snapshot again in an offscreen WKWebView from the dev server, page scripts off, at the
+  guest's window size, for frames and crops. Nothing asks the guest to share their screen.
+- `Live.swift`: the session (tokens, cloudflared, the room's presence, cursors and items), turning a recording into a
+  session folder (`author.via` = live, `page`, `followUp`, `live.json`), confirmations (`state.json` `confirmed`), and
+  the summary (`~/PointAndYap/live/<id>.md`).
+
+Test: `bash relay/test/live-e2e.sh [app dir]` scaffolds a Vite + React app (or uses yours), runs it behind `--live`,
+has a Chrome guest talk and click, accepts the item, has an MCP agent `wait_for_items`, edit the source line it
+names and `mark_done`, and checks that the guest's page changed by hot reload and that the guest confirmed it.
+`LIVE_TUNNEL=1` goes through a real tunnel. `relay/test/live-room.mjs <link> <wav> <dir>` checks two people's cursors.
+`POINTANDYAP_LIVE_DEBUG=1` logs the proxy's failures.
+
 ## Review links
 
 `PointAndYap --share [<session>] [--from <name>] [--title <text>]` uploads a recording's screenshots (only those, at most
