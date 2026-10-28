@@ -182,7 +182,10 @@ final class AppState: ObservableObject {
         let ids = Items.items(in: row.dir, state: Items.readState(row.dir)).items.map(\.id)
         _ = Items.set(ids, status: "open", agent: "you", note: nil)
         loadSessions()
-        say("In the queue")
+        // As after a recording of the user's own: the line for an agent goes on the clipboard.
+        copyPointer(row.dir)
+        Sounds.play("done")
+        say("Copied. Paste it into your agent")
     }
 
     /// A review link for a recording's screenshots, on the clipboard.
