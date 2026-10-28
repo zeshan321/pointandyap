@@ -1,6 +1,6 @@
 import Foundation
 
-/// The work queue: each recording is one item (an agent does everything said in it, then marks it done). Each item is open, in progress (an agent works on it), or done; the state lives in the session's state.json
+/// The work queue: each recording is one item (an agent does everything said in it, then marks it done). Each item is open, in progress (an agent works on it), or done; one from a review link starts in triage until the user accepts it. The state lives in the session's state.json
 /// and every change goes through one lock, so several agents can work at once.
 struct Item {
     var id: String            // "<session>#<n>"
@@ -148,6 +148,8 @@ enum Items {
                 if st == nil { st = ItemState(source: source) }
                 for id in list {
                     guard let item = items.first(where: { $0.id == id }) else { missing.append(id); continue }
+                    // From a review link: waits for the user to accept it before any agent may touch it.
+                    if item.status == "triage", agent != "you" { missing.append("\(id) (waiting for the user to accept it)"); continue }
                     if status == "in_progress", item.status == "done" || (item.status == "in_progress" && item.by != agent) {
                         missing.append("\(id) (\(item.status == "done" ? "done" : "in progress by \(item.by ?? "another agent")"))"); continue
                     }

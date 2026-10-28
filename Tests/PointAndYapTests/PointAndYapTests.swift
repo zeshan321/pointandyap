@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 @testable import PointAndYap
 
 /// A synthetic recording ("This button should be blue, not gray, and here, the date is wrong. It should say today.",
@@ -8,6 +9,7 @@ final class PointAndYapTests: XCTestCase {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pointandyap-tests-\(UUID().uuidString)/sessions")
         try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         setenv("POINTANDYAP_SESSIONS", dir.path, 1)   // read once by Paths.root
+        setenv("POINTANDYAP_LINKS", dir.deletingLastPathComponent().appendingPathComponent("links").path, 1)
         return dir
     }()
 
@@ -159,6 +161,56 @@ final class PointAndYapTests: XCTestCase {
         let dir = session("2026-10-17_120008")
         XCTAssertNil(Items.items(in: dir, state: nil).items.first?.author)
         XCTAssertFalse(Items.items(in: dir, state: nil).items[0].body.contains("not the user"))
+    }
+
+    /// A link to a processed copy of the fixture, as --share would save it (without a relay), and its owner key.
+    func link(_ session: String) -> (LinkRecord, P256.KeyAgreement.PrivateKey) {
+        _ = self.session(session)
+        let mine = P256.KeyAgreement.PrivateKey()
+        let key = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+        let r = LinkRecord(id: "abcdefghijklmnop", relay: "http://localhost", token: "t", key: Links.b64url(key),
+                           privateKey: mine.rawRepresentation.base64EncodedString(), session: session,
+                           frames: ["frames/001.jpg"], created: Date(), url: "")
+        return (r, mine)
+    }
+
+    /// A guest resting on the Save button the owner recorded (385, 224 of 1440 x 900), then typing.
+    static let guest = #"{"v":1,"name":"Dana","duration":6,"samples":[],"points":[{"t":0.2,"end":1.5,"kind":"dwell","f":"frames/001.jpg","x":0.25,"y":0.24},{"t":2,"end":2,"kind":"click","f":"../events.json","x":0.5,"y":0.5}],"text":"This [1] should say Store, not Save"}"#
+
+    func testFeedbackOpensOnlyWithThisMacsKeyAndTheLinkKey() throws {
+        let (r, mine) = link("2026-10-17_120009")
+        let sealed = try Links.sealFeedback(Data(Self.guest.utf8), to: mine.publicKey, linkKey: Links.unb64url(r.key)!, id: r.id)
+        XCTAssertEqual(try Links.openFeedback(sealed, link: r).name, "Dana")
+        var other = r; other.privateKey = P256.KeyAgreement.PrivateKey().rawRepresentation.base64EncodedString()
+        XCTAssertThrowsError(try Links.openFeedback(sealed, link: other), "another key cannot open it")
+        var otherLink = r; otherLink.id = "zzzzzzzzzzzzzzzz"
+        XCTAssertThrowsError(try Links.openFeedback(sealed, link: otherLink), "it is bound to its link")
+    }
+
+    func testFeedbackFromALinkWaitsInTriageWithTheElementUnderTheGuestsPointer() async throws {
+        let (r, _) = link("2026-10-17_120010")
+        let fb = try JSONDecoder().decode(Feedback.self, from: Data(Self.guest.utf8))
+        let dir = try Links.session(from: fb, link: r)
+        _ = await Process.run(dir: dir, log: { _ in })
+        let e = try JSONDecoder.iso.decode(SessionEvents.self, from: Data(contentsOf: dir.appendingPathComponent("events.json")))
+        XCTAssertEqual(e.points.count, 1, "a point on a frame that was not shared is dropped")
+        XCTAssertEqual(e.points[0].element?.title, "Save", "resolved from what this Mac recorded there")
+        XCTAssertEqual(e.author, Author(name: "Dana", via: "link"))
+        let item = try XCTUnwrap(Items.items(in: dir, state: Items.readState(dir)).items.first)
+        XCTAssertEqual(item.status, "triage")
+        XCTAssertTrue(item.body.contains("Store"), item.body)
+        XCTAssertEqual(item.crops.count, 1)
+
+        XCTAssertTrue(Items.openItems(limit: 5, take: true, agent: "a").allSatisfy { $0.session != dir.lastPathComponent }, "not handed out in triage")
+        XCTAssertEqual(Items.set([item.id], status: "done", agent: "a", note: nil).changed, [], "an agent cannot close it")
+        XCTAssertEqual(Items.set([item.id], status: "open", agent: "you", note: nil).changed, [item.id], "the user accepts it")
+        XCTAssertTrue(Items.openItems(limit: 5, take: true, agent: "a").contains { $0.id == item.id })
+    }
+
+    func testTypedFeedbackKeepsItsWordsInOrder() {
+        let w = Links.typed("make this bigger", over: 6)
+        XCTAssertEqual(w.map(\.text), ["make", "this", "bigger"])
+        XCTAssertTrue(zip(w, w.dropFirst()).allSatisfy { $0.end <= $1.start })
     }
 
     func testOnlyOurOldAgentEntriesAreReplaced() {

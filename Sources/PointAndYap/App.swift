@@ -9,6 +9,8 @@ struct Main {
         //   PointAndYap --items            open and in-progress items
         //   PointAndYap --done <id>... [--note "what changed"]
         if args.contains("--items") || args.contains("--done") { QueueCLI.run(args); return }
+        // Review links: --share [<session>] [--relay <url>], --pull, --links, --revoke <id>, --accept <item id>...
+        if ["--share", "--pull", "--links", "--revoke", "--accept"].contains(where: args.contains) { LinksCLI.run(args); return }
         // Local MCP server for coding agents: PointAndYap --mcp
         if args.contains("--mcp") { MCPServer.run(); return }
         // Headless: PointAndYap --process <session dir>
@@ -115,6 +117,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Agents mark items done from their own processes: read the states again while the window shows.
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { if let self, self.window.isVisible, self.state.phase == .idle { self.state.loadSessions() } }
+        }
+        // Review links: what guests sent, every 30 s (nothing goes online without a link).
+        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { if self?.state.phase == .idle { self?.state.pullLinks() } }
         }
         state.refreshAccess()
         doubleControl = DoubleControl(fire: { [weak self] in if Prefs.doubleControl { self?.state.toggle() } },

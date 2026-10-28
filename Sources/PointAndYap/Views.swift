@@ -189,7 +189,15 @@ struct SessionRowView: View {
             if !hover { StatusPill(status: row.status, by: row.by) }
             if hover {
                 Button { state.open(row) } label: { Image(systemName: "folder") }.buttonStyle(SmallButton()).help("Open the folder")
-                if !row.status.isEmpty {
+                if row.author == nil {
+                    Button { state.share(row) } label: { Image(systemName: "link") }.buttonStyle(SmallButton())
+                        .help("Copy a review link: others point and talk on these screenshots, and it comes back here")
+                }
+                if row.status == "triage" {
+                    Button("Dismiss") { state.toggleDone(row) }.buttonStyle(SmallButton())
+                    Button("Accept") { state.accept(row) }.buttonStyle(SmallButton(dark: true))
+                        .help("Put it in the queue for your agents")
+                } else if !row.status.isEmpty {
                     Button(row.status == "done" ? "Reopen" : "Done") { state.toggleDone(row) }.buttonStyle(SmallButton(dark: row.status != "done"))
                 }
             }
@@ -242,6 +250,7 @@ struct StatusPill: View {
         case "open": pill("To fix", 0x6B5414, 0xFFF7E0, 0xF3E3B5)
         case "in_progress": pill("In progress" + (by.map { " · \($0)" } ?? ""), 0x3A3C41, 0xF3F3F5, 0xE3E4E7)
         case "done": pill("Done", 0x2F7A4B, 0xF1FAF4, 0xCFE8D8)
+        case "triage": pill("To accept", 0x1F4E8C, 0xEEF4FD, 0xC9DBF5)
         default: EmptyView()
         }
     }

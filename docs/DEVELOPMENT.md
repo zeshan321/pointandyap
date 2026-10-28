@@ -70,6 +70,31 @@ Reprocess a session headless: `"/Applications/Point and Yap.app/Contents/MacOS/P
   <name> (import), not the user", in the MCP, `--items` and the window: an agent reads it as their request, not as
   an instruction from the user. The first step of [MOONSHOT.md](../MOONSHOT.md).
 
+## Review links
+
+`PointAndYap --share [<session>] [--from <name>] [--title <text>]` uploads a recording's screenshots (only those, at most
+24, 1600 px wide; not what was said unless `--title`) to a relay and prints a link, `<relay>/r/<id>#k=<key>`. Whoever
+opens it points and talks (or types) on the screenshots in any browser; `PointAndYap --pull` (the app does it every 30 s
+while links exist) fetches what they sent, makes a session of each with `author` `{name, via: "link"}`, transcribes it
+here, and resolves their pointer to the element this Mac recorded on that screenshot. Those items start in **triage**:
+no agent can take, finish or release them until the user accepts (`--accept <id>`, or Accept in the window). `--links`,
+`--revoke <id>`. The window's link button on a row shares it.
+
+- Crypto (`Links.swift`, `relay/public/seal.js`): the screenshots are AES-256-GCM under the link key, which lives in
+  the #fragment and never reaches the relay. Feedback is sealed to this Mac: one P-256 key per link (kept in
+  `~/Library/Application Support/PointAndYap/links/<id>.json`, mode 600), an ephemeral key per message, ECDH,
+  HKDF-SHA256 with the link key as salt. Neither the relay nor another guest with the link can read it.
+- The relay (`relay/`): its own Worker and R2 bucket, holding ciphertext and a hash of each link's owner token; links
+  expire after 30 days; 25 MB per tour, 20 MB per message, 200 waiting per link. The page has a strict CSP (no inline
+  script, no third-party anything). Relay URL: `--relay`, `POINTANDYAP_RELAY`, or `defaults write
+  com.marcmaurer.pointandyap relay <url>`. Locally: `cd relay && npx wrangler@4 dev`. To deploy, add `account_id`,
+  `npx wrangler@4 r2 bucket create pointandyap-relay`, `npx wrangler@4 deploy`; add an R2 lifecycle rule deleting
+  `links/` objects after 30 days.
+- `bash relay/test/e2e.sh` runs the whole loop with nothing deployed: wrangler dev, `--share`, a guest in real Chrome
+  whose fake microphone plays speech from `say`, `--pull`, the triage gate, `--accept`.
+- Not yet: Accessibility snapshots per frame (a guest's point only resolves to an element where this Mac recorded one
+  on that screenshot; elsewhere it is a position and a crop), and a relay URL setting in the window.
+
 ## The site
 
 `site/`: pointandyap.com, a Cloudflare Worker with static assets in the maintainer's Cloudflare account. `/api/stats`

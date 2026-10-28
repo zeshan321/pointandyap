@@ -93,7 +93,7 @@ session folder and sends it over Slack; you run `PointAndYap --import their-sess
 - Tests: an imported session becomes one item with its author; MCP text carries the third-party label; malicious
   archives are refused.
 
-**Exit:** two Macs can collaborate by sending files, safely.
+**Exit:** two Macs can collaborate by sending files, safely. *Done (branch `moonshot/phase-0-authorship`).*
 
 ### Phase 1: Async review links (months 2–3)
 
@@ -108,6 +108,12 @@ session folder and sends it over Slack; you run `PointAndYap --import their-sess
 
 **Exit:** send a link; a guest on any OS leaves voice-and-pointer feedback; it shows up in your queue with real
 elements.
+
+*Built, tested locally (`relay/test/e2e.sh`), not deployed.* Changes from the plan: no Durable Object yet (R2 alone
+holds the link's metadata; rate limits beyond per-link caps come with deploy); feedback is sealed to a per-link P-256 key
+of the owner's Mac rather than the link key, so other guests cannot read it either; guests can type instead of talk;
+the owner's words are not shared unless they give a title. Deferred: Accessibility snapshots per frame (they need
+live testing with the permissions); for now a guest's point resolves only where the owner's recording had an element.
 
 ### Phase 2: Live rooms (months 4–6)
 

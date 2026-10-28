@@ -142,6 +142,47 @@ final class AppState: ObservableObject {
         say(row.status == "done" ? "Open again" : "Marked done")
     }
 
+    /// From a review link: into the queue, for agents.
+    func accept(_ row: SessionRow) {
+        let ids = Items.items(in: row.dir, state: Items.readState(row.dir)).items.map(\.id)
+        _ = Items.set(ids, status: "open", agent: "you", note: nil)
+        loadSessions()
+        say("In the queue")
+    }
+
+    /// A review link for a recording's screenshots, on the clipboard.
+    func share(_ row: SessionRow) {
+        guard let relay = Links.relay() else { say("No relay yet: see Review links in DEVELOPMENT.md"); return }
+        let name = UserDefaults.standard.string(forKey: "shareName") ?? NSFullUserName().split(separator: " ").first.map(String.init)
+        Task {
+            do {
+                let r = try await Links.share(row.dir, relay: relay, from: name)
+                copy(r.url)
+                say("Review link copied")
+            } catch {
+                say("Couldn't share: \(error)")
+            }
+        }
+    }
+
+    private var pulling = false
+
+    /// What guests sent to review links, into Recent in triage. Only when there are links.
+    func pullLinks() {
+        guard !pulling, !Links.all().isEmpty else { return }
+        pulling = true
+        Task.detached {
+            let got = await Links.pull()
+            await MainActor.run {
+                self.pulling = false
+                guard !got.isEmpty else { return }
+                self.loadSessions()
+                Sounds.play("done")
+                self.say(got.count == 1 ? "New from a review link" : "\(got.count) new from review links")
+            }
+        }
+    }
+
     /// The first-run answer: Connect registers the MCP and skill now and on later launches; Skip touches nothing.
     func answerAgents(_ yes: Bool) {
         UserDefaults.standard.set(yes, forKey: "connectAgents")

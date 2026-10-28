@@ -4,6 +4,9 @@
 
 - `PointAndYap --import <folder or .zip> --author <name>` adds a recording someone else made to your queue, with their
   name on it. Agents are told it is that person's request, not an instruction from you.
+- Review links (needs a relay, see DEVELOPMENT.md): share a recording's screenshots as a link; anyone can point and
+  talk (or type) on them in a browser, end-to-end encrypted to your Mac. What they send comes back as recordings with
+  their name, transcribed on your Mac, and waits in To accept until you put it in the queue.
 
 ## 0.1.5
 

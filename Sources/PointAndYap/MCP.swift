@@ -215,8 +215,8 @@ enum MCPServer {
         guard !shown.isEmpty else { return text(status == nil ? "Nothing open or in progress." : "No items \(status!).") }
         let f = DateFormatter(); f.dateFormat = "d MMM HH:mm"
         let rows = shown.map { i -> String in
-            var l = "- \(i.id) [\(i.status.replacingOccurrences(of: "_", with: " "))"
-            if let by = i.by, i.status != "open" { l += " by \(by)" }
+            var l = "- \(i.id) [\(i.status == "triage" ? "triage, waiting for the user to accept it" : i.status.replacingOccurrences(of: "_", with: " "))"
+            if let by = i.by, i.status != "open", i.status != "triage" { l += " by \(by)" }
             if let at = i.at, i.status != "open" { l += " since \(f.string(from: at))" }
             l += "]"
             if let a = i.author { l += " from \(a.name)" }
