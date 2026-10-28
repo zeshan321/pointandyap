@@ -25,6 +25,8 @@ final class LiveSession: @unchecked Sendable {
     private var watch: Timer?
     /// The app's window: people came or went, or an item moved.
     var onChange: (@Sendable () -> Void)?
+    /// A guest asked for something: their name and what they said, a line per request.
+    var onRequest: (@Sendable (String, [String]) -> Void)?
     var log: @Sendable (String) -> Void = { _ in }
 
     /// Without a tunnel, the link works on this Mac only (for trying it out).
@@ -101,12 +103,28 @@ final class LiveSession: @unchecked Sendable {
             await Proxy.json(w, ["ok": true, "id": "\(dir.lastPathComponent)#1"], status: 202)
             do {
                 try await Live.ingest(rec, into: dir, live: self, guest: guest, role: role, followUp: await room.followUp(rec.followUp, guest: guest))
-                log("\(role == "owner" ? "you" : rec.name): \(Items.items(in: dir, state: Items.readState(dir)).items.first.map { "\"\($0.title)…\" (\($0.status == "triage" ? "to accept" : "queued"))" } ?? "nothing heard")")
+                let got = Items.items(in: dir, state: Items.readState(dir)).items
+                if role != "owner", !got.isEmpty { onRequest?(rec.name, got.map(\.title)) }
+                log("\(role == "owner" ? "you" : rec.name): \(got.isEmpty ? "nothing heard" : got.map { "\"\($0.title)…\"" }.joined(separator: ", ") + (got[0].status == "triage" ? " (to accept)" : " (queued)"))")
             } catch {
                 log("a recording from \(rec.name) was dropped: \(error)")
             }
             _ = await room.refresh(self)
             onChange?()
+        case ("POST", "/__pay/api/accept"):
+            // The owner lets a guest's recording into the queue from their own browser.
+            let body = await w.read(exactly: min(Int(head.get("Content-Length") ?? "") ?? 0, 4096))
+            guard role == "owner", let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any], let item = obj["id"] as? String,
+                  let session = item.split(separator: "#").first, await room.owns(item, guest: nil) else {
+                return await Proxy.json(w, ["ok": false], status: 403)
+            }
+            let dir = Paths.root.appendingPathComponent(String(session))
+            let ids = Items.items(in: dir, state: Items.readState(dir)).items.map(\.id)
+            let r = Items.set(ids, status: "open", agent: "you", note: nil)
+            log("you accepted \(r.changed.joined(separator: ", "))")
+            _ = await room.refresh(self)
+            onChange?()
+            await Proxy.json(w, ["ok": !r.changed.isEmpty])
         case ("POST", "/__pay/api/confirm"):
             let body = await w.read(exactly: min(Int(head.get("Content-Length") ?? "") ?? 0, 4096))
             guard let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any], let item = obj["id"] as? String,
@@ -159,6 +177,33 @@ enum Live {
             try? FileManager.default.createDirectory(at: d.appendingPathComponent("frames"), withIntermediateDirectories: true)
             return d
         }
+    }
+
+    // An agent waiting for items (wait_for_items, --wait) says so every second, so the people in a live review see
+    // that someone is there to fix what they ask.
+    static var agentsDir: URL { dir.appendingPathComponent("agents") }
+
+    static func listening(_ agent: String) {
+        let name = agent.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || "-_. ".unicodeScalars.contains($0) }.prefix(60)
+        guard !name.isEmpty else { return }
+        try? FileManager.default.createDirectory(at: agentsDir, withIntermediateDirectories: true)
+        try? Data().write(to: agentsDir.appendingPathComponent(String(String.UnicodeScalarView(name))))
+    }
+
+    /// Agents that waited for items in the last 15 seconds, or are working on one now.
+    static func agents() -> [String] {
+        let fm = FileManager.default
+        let files = (try? fm.contentsOfDirectory(at: agentsDir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        let recent = files.filter { f in
+            ((try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate).map { Date().timeIntervalSince($0) < 15 }) ?? false
+        }.map(\.lastPathComponent)
+        return recent.sorted()
+    }
+
+    /// "claude-code" as people read it.
+    static func agentName(_ s: String) -> String {
+        let known = ["claude-code": "Claude Code", "claude": "Claude", "codex": "Codex", "cursor": "Cursor"]
+        return known[s.lowercased()] ?? s
     }
 
     /// One line, plain, short: page text reaches an agent.
@@ -245,6 +290,31 @@ enum Live {
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
+    /// The words of one request, as said (a recording that asks for several things has a part for each).
+    static func said(_ i: Item, _ dir: URL) -> String {
+        let words = (try? Data(contentsOf: dir.appendingPathComponent("transcript.json"))).flatMap { try? JSONDecoder().decode([Word].self, from: $0) } ?? []
+        var sents = Builder.sentences(words)
+        let events = (try? Data(contentsOf: dir.appendingPathComponent("events.json"))).flatMap { try? JSONDecoder.iso.decode(SessionEvents.self, from: $0) }
+        _ = Builder.attach(events?.points ?? [], to: &sents)
+        let groups = Builder.requests(sents, events?.points ?? [])
+        guard i.n - 1 < groups.count else { return words.map(\.text).joined(separator: " ") }
+        return groups[i.n - 1].sents.flatMap { sents[$0].words }.map(\.text).joined(separator: " ")
+    }
+
+    /// Where a request points on its page, for its pin: the first element it is about, and where on it.
+    static func anchor(_ i: Item, _ events: SessionEvents?) -> LiveRecording.Anchor? {
+        guard let pts = events?.points else { return nil }
+        for idx in i.points where idx < pts.count {
+            let p = pts[idx]
+            guard let sel = p.element?.selector, let f = p.element?.frame?.cg else { continue }
+            let path = p.url.flatMap { URLComponents(string: $0)?.path } ?? "/"
+            return .init(path: path.isEmpty ? "/" : path, sel: sel,
+                         rx: f.width > 0 ? ((p.at.x - f.minX) / f.width * 1000).rounded() / 1000 : 0.5,
+                         ry: f.height > 0 ? ((p.at.y - f.minY) / f.height * 1000).rounded() / 1000 : 0.5)
+        }
+        return nil
+    }
+
     /// The newest live review's id.
     static func latest() -> String? {
         ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
@@ -254,10 +324,9 @@ enum Live {
     /// What a live review produced, for a pull request: who asked for what, where, what the agent did, who checked it.
     static func summary(_ id: String) -> String {
         let info = (try? Data(contentsOf: dir.appendingPathComponent("\(id).json"))).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-        let rows: [(Item, SessionEvents?, URL)] = sessions(of: id).compactMap { d in
-            guard let i = Items.items(in: d, state: Items.readState(d)).items.first else { return nil }
+        let rows: [(Item, SessionEvents?, URL)] = sessions(of: id).flatMap { d in
             let e = (try? Data(contentsOf: d.appendingPathComponent("events.json"))).flatMap { try? JSONDecoder.iso.decode(SessionEvents.self, from: $0) }
-            return (i, e, d)
+            return Items.items(in: d, state: Items.readState(d)).items.map { ($0, e, d) }
         }
         var md = "## Live review\(info?["upstream"].map { " of localhost:\($0)" } ?? "")\n\n"
         let people = Array(Set(rows.map { $0.0.author?.name ?? "you" })).sorted()
@@ -271,10 +340,10 @@ enum Live {
             }
             md += "\n"
             for (i, e, d) in rows {
-                let words = (try? Data(contentsOf: d.appendingPathComponent("transcript.json"))).flatMap { try? JSONDecoder().decode([Word].self, from: $0) } ?? []
-                md += "### \(i.author?.name ?? "You"): \(i.title)…\n\n> \(words.map(\.text).joined(separator: " "))\n\n"
+                md += "### \(i.author?.name ?? "You"): \(i.title)…\n\n> \(Live.said(i, d))\n\n"
                 if let f = e?.followUp { md += "Follow-up to `\(f.id)`.\n" }
-                for p in (e?.points ?? []).filter({ $0.element?.source != nil || $0.kind == "click" }).prefix(4) { md += "- [\(p.index + 1)] \(Builder.describe(p))\n" }
+                let pts = e?.points ?? []
+                for p in i.points.compactMap({ $0 < pts.count ? pts[$0] : nil }).filter({ $0.element?.source != nil || $0.kind == "click" }).prefix(4) { md += "- [\(p.index + 1)] \(Builder.describe(p))\n" }
                 if let pg = e?.page { md += "- Seen in \(pg.browser), \(pg.viewport), \(pg.url)\n" }
                 if let n = i.note { md += "- Fix (\(i.by ?? "agent")): \(n)\n" }
                 if i.confirmed != nil { md += "- \(i.author?.name ?? "You") looked at the fix and said it is right.\n" }
@@ -311,6 +380,7 @@ actor Room {
     private var peers: [String: Peer] = [:]
     private var tracked: [Tracked] = []
     private var last: [String: String] = [:]   // per peer: the items message last sent
+    private var anchors: [String: [LiveRecording.Anchor?]] = [:]   // per recording, once written down: each request's pin
     private var colorIndex = 0
     static let colors = ["#e5484d", "#3e63dd", "#30a46c", "#f76b15", "#8e4ec6", "#12a594", "#d6409f", "#ab6400"]
 
@@ -377,25 +447,30 @@ actor Room {
         refreshNow()
     }
 
-    func owns(_ item: String, guest: String) -> Bool {
-        tracked.contains { "\($0.dir.lastPathComponent)#1" == item && $0.guest == guest }
+    /// Whether the item was asked in this link (by `guest`, when given).
+    func owns(_ item: String, guest: String?) -> Bool {
+        tracked.contains { item.hasPrefix("\($0.dir.lastPathComponent)#") && (guest == nil || $0.guest == guest) }
     }
 
     func name(of guest: String) -> String? { peers.values.first { $0.guest == guest }?.name }
 
     /// "Not yet" on an item this guest asked for: what it was, and what the agent said it did.
     func followUp(_ item: String?, guest: String) -> FollowUp? {
-        guard let item, let t = tracked.first(where: { "\($0.dir.lastPathComponent)#1" == item && ($0.guest == guest || guest == "owner") }),
-              let i = Items.items(in: t.dir, state: Items.readState(t.dir)).items.first else { return nil }
+        guard let item, let t = tracked.first(where: { item.hasPrefix("\($0.dir.lastPathComponent)#") && ($0.guest == guest || guest == "owner") }),
+              let i = Items.items(in: t.dir, state: Items.readState(t.dir)).items.first(where: { $0.id == item }) else { return nil }
         return FollowUp(id: i.id, said: i.title, note: i.note, by: i.by)
     }
 
     /// Sends each peer the items it may see when they changed. True when anything did.
     func refresh(_ live: LiveSession) -> Bool { refreshNow() }
 
+    private(set) var agents: [String] = []
+
     @discardableResult
     private func refreshNow() -> Bool {
-        var changed = false
+        let now = Live.agents().map(Live.agentName)
+        var changed = now != agents
+        agents = now
         for p in peers.values {
             let msg = items(for: p)
             guard let data = try? JSONSerialization.data(withJSONObject: msg, options: [.sortedKeys]), let s = String(data: data, encoding: .utf8) else { continue }
@@ -404,29 +479,45 @@ actor Room {
         return changed
     }
 
+    private static func json(_ a: LiveRecording.Anchor) -> [String: Any] { ["path": a.path, "sel": a.sel as Any, "rx": a.rx as Any, "ry": a.ry as Any] }
+
     /// The room's queue as one browser may see it: the owner sees everything, a guest their own and, unless the link is
     /// private, everyone's that was not marked private.
     private func items(for p: Peer) -> [String: Any] {
-        let list: [[String: Any]] = tracked.compactMap { t in
+        let list: [[String: Any]] = tracked.flatMap { t -> [[String: Any]] in
             let mine = t.guest == p.guest
-            guard p.role == "owner" || mine || !t.priv else { return nil }
-            let st = Items.readState(t.dir)
-            let item = Items.items(in: t.dir, state: st).items.first
-            let processed = FileManager.default.fileExists(atPath: t.dir.appendingPathComponent("session.md").path)
-            var o: [String: Any] = ["id": "\(t.dir.lastPathComponent)#1", "mine": mine, "private": t.priv, "from": t.name ?? "you"]
-            if let item {
+            guard p.role == "owner" || mine || !t.priv else { return [] }
+            let base: [String: Any] = ["mine": mine, "private": t.priv, "from": t.name ?? "you", "rec": t.dir.lastPathComponent]
+            let items = Items.items(in: t.dir, state: Items.readState(t.dir)).items
+            guard !items.isEmpty else {
+                let processed = FileManager.default.fileExists(atPath: t.dir.appendingPathComponent("session.md").path)
+                var o = base
+                o["id"] = "\(t.dir.lastPathComponent)#1"
+                o["status"] = processed ? "empty" : "processing"
+                if let a = t.anchor { o["anchor"] = Self.json(a) }
+                return [o]
+            }
+            let events = anchors[t.dir.lastPathComponent] == nil
+                ? (try? Data(contentsOf: t.dir.appendingPathComponent("events.json"))).flatMap { try? JSONDecoder.iso.decode(SessionEvents.self, from: $0) }
+                : nil
+            if anchors[t.dir.lastPathComponent] == nil {
+                anchors[t.dir.lastPathComponent] = items.map { Live.anchor($0, events) ?? ($0.n == 1 ? t.anchor : nil) }
+            }
+            let marks = anchors[t.dir.lastPathComponent] ?? []
+            return items.map { item in
+                var o = base
+                o["id"] = item.id
                 o["title"] = item.title
                 o["status"] = item.status
-                if let by = item.by, item.status == "in_progress" || item.status == "done" { o["by"] = by }
+                if items.count > 1 { o["part"] = "\(item.n) of \(items.count)" }
+                if let by = item.by, item.status == "in_progress" || item.status == "done" { o["by"] = Live.agentName(by) }
                 if let n = item.note, item.status == "done" { o["note"] = n }
                 if item.confirmed != nil { o["confirmed"] = true }
-            } else {
-                o["status"] = processed ? "empty" : "processing"
+                if item.n - 1 < marks.count, let a = marks[item.n - 1] { o["anchor"] = Self.json(a) }
+                return o
             }
-            if let a = t.anchor { o["anchor"] = ["path": a.path, "sel": a.sel as Any, "rx": a.rx as Any, "ry": a.ry as Any] }
-            return o
         }
-        return ["t": "items", "items": list]
+        return ["t": "items", "items": list, "agents": agents]
     }
 }
 

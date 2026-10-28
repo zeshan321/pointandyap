@@ -40,8 +40,8 @@ struct Main {
             Task.detached {
                 do {
                     let dir = try await Import.run(src, author: author)
-                    let item = Items.items(in: dir, state: nil).items.first
-                    print("Imported \(dir.lastPathComponent)\(item.map { " from \($0.author?.name ?? "?"): \"\($0.title)…\"" } ?? " (no speech)")")
+                    let items = Items.items(in: dir, state: nil).items
+                    print("Imported \(dir.lastPathComponent)\(items.first.map { " from \($0.author?.name ?? "?"): \"\($0.title)…\"" } ?? " (no speech)")\(items.count > 1 ? ", \(items.count) requests" : "")")
                 } catch {
                     print("Not imported: \(error)")
                     failed = true

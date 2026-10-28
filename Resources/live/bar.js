@@ -51,7 +51,7 @@
   const S = {
     name: store.get("pay-name") || "", role: null, owner: "", privateMode: false, trusted: false, me: null,
     peers: [], items: [], rec: null, panel: false, lock: false, connected: false, small: store.get("pay-small") === "1",
-    typing: null, toast: null, asking: null,
+    typing: null, toast: null, asking: null, agents: [], hover: null, welcomed: store.get("pay-welcomed") === "1",
   };
   const seen = new Map();   // item id → status last seen, to notice "done" on mine
   const REST_PX = 8, REST_S = 0.35, MAX_S = 600;
@@ -225,14 +225,26 @@
   }
 
   /** The element worth naming at a point: the control around a tapped icon or label text. */
-  function describe(x, y) {
+  function pick(x, y) {
     let el = at(x, y);
-    if (!el || isOurs(el)) return null;
+    if (!el || isOurs(el) || el === document.documentElement) return null;
     const ctl = el.closest("button, a[href], input, select, textarea, summary, label, [role], [data-testid]");
     if (ctl && ctl !== document.body) {
       let d = 0; for (let e = el; e && e !== ctl; e = e.parentElement) d++;
       if (d <= 4) el = ctl;
     }
+    return el;
+  }
+
+  /** How the bar names an element to the person pointing: what they will see in the request. */
+  function nameOf(el) {
+    const r = role(el), t = (el.getAttribute("aria-label") || visible(el) || el.getAttribute("alt") || el.getAttribute("placeholder") || "").slice(0, 40);
+    return `${r || el.tagName.toLowerCase()}${t ? ` “${t}”` : ""}`;
+  }
+
+  function describe(x, y) {
+    const el = pick(x, y);
+    if (!el) return null;
     const r = el.getBoundingClientRect();
     const fw = framework(el);
     const out = {
@@ -245,6 +257,7 @@
     };
     if (out.text && out.text === out.label) out.label = null;
     if (fw.stack) Object.defineProperty(out, "stack", { value: fw.stack, enumerable: false });
+    Object.defineProperty(out, "node", { value: el, enumerable: false });   // for the marks while recording
     return out;
   }
 
@@ -318,9 +331,12 @@
     return p;
   }
 
-  let anchor = null, resting = null;
+  let anchor = null, resting = null, lastPointer = null;
   addEventListener("pointermove", (e) => {
-    if (!S.rec || e.pointerType === "touch" || isOurs(e.target)) return;
+    if (e.pointerType !== "touch") lastPointer = isOurs(e.target) ? null : { x: e.clientX, y: e.clientY };
+    if ((!S.rec && !S.typing) || e.pointerType === "touch" || isOurs(e.target)) { if (S.hover) S.hover = null; return; }
+    S.hover = pick(e.clientX, e.clientY);
+    if (!S.rec) return;
     if (!anchor || Math.hypot(e.clientX - anchor.x, e.clientY - anchor.y) > REST_PX) {
       if (resting) { resting.end = r3(now()); resting = null; }
       anchor = { x: e.clientX, y: e.clientY, t: now() };
@@ -341,7 +357,7 @@
 
   async function start(followUp = null) {
     if (S.rec) return;
-    if (!S.name && S.role !== "owner") { S.asking = { then: () => start(followUp) }; S.panel = true; render(); return; }
+    if (!S.name && S.role !== "owner") { S.asking = { ...S.asking, then: () => start(followUp) }; S.panel = true; render(); return; }
     let stream;
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } }); }
     catch { toast("The microphone is not allowed here. You can type instead."); S.typing = { t0: performance.now(), points: [], followUp }; S.panel = true; render(); return; }
@@ -351,7 +367,9 @@
     S.rec = { t0: performance.now(), points: [], snaps: new Map(), chunks: [], rate: ctx.sampleRate, ctx, stream, node, followUp, lock: S.lock || S.privateMode };
     node.onaudioprocess = (e) => { if (S.rec) S.rec.chunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
     src.connect(node); node.connect(ctx.destination);
-    anchor = null; resting = null; dirty = true;
+    // Already resting on something when it starts: that counts as pointing at it.
+    anchor = lastPointer ? { ...lastPointer, t: 0 } : null; resting = null; dirty = true;
+    if (lastPointer) S.hover = pick(lastPointer.x, lastPointer.y);
     snapshot(0);
     send({ t: "talking", on: true });
     S.rec.tick = setInterval(() => { render(); if (now() >= MAX_S) stop(); }, 500);
@@ -481,23 +499,32 @@
     if (msg.t === "welcome") {
       S.me = msg.you.id; S.role = msg.you.role; S.owner = msg.owner; S.privateMode = msg.private; S.trusted = msg.trusted;
       if (S.role === "owner") { S.name = msg.owner; send({ t: "hello", name: msg.owner }); }
+      else if (!S.name && !S.welcomed) { S.welcomed = true; store.set("pay-welcomed", "1"); S.asking = { welcome: true }; S.panel = true; }
     } else if (msg.t === "peers") S.peers = msg.peers;
     else if (msg.t === "cursor") { cursors.set(msg.id, { ...msg, at: performance.now() }); return; }
     else if (msg.t === "items") {
+      // The list first: a toast below redraws, and the bar must already show what this message says.
+      S.agents = msg.agents || [];
+      S.items = msg.items;
+      let said = null;
       for (const it of msg.items) {
         const before = seen.get(it.id);
-        if (it.mine && it.status === "done" && before && before !== "done" && !it.confirmed) {
+        seen.set(it.id, it.status);
+        if (!it.mine || !before || before === it.status) continue;
+        if (before === "triage" && it.status === "open") said ||= `${S.owner} accepted it.${S.agents.length ? ` ${S.agents[0]} will pick it up.` : ""}`;
+        else if (it.status === "in_progress") said ||= `${it.by || "The agent"} is working on it`;
+        else if (it.status === "done" && !it.confirmed) {
           // A small card, not the list: the page itself is what they need to look at, so what they pointed at is
-          // brought into view and its pin flashes.
-          S.check = it.id; S.panel = false;
+          // brought into view and its pin flashes. The first one first, when several are done at once.
+          if (!msg.items.some((x) => x.id === S.check && x.status === "done" && !x.confirmed)) S.check = it.id;
+          S.panel = false;
           chime();
           const sel = it.anchor?.path === location.pathname && it.anchor.sel;
           try { if (sel) document.querySelector(sel)?.scrollIntoView({ block: "center", behavior: "smooth" }); } catch {}
           S.flash = it.id; setTimeout(() => { S.flash = null; }, 4000);
         }
-        seen.set(it.id, it.status);
       }
-      S.items = msg.items;
+      if (said) toast(said);
     }
     render();
   }
@@ -562,8 +589,38 @@
       }
       for (const d of [...layer.children]) if (!keep.has(d.dataset.id)) d.remove();
       drawPins();
+      drawMarks();
     }
     requestAnimationFrame(drawCursors);
+  }
+
+  // While recording (or typing): a box on what is under the pointer, and a numbered mark on each thing pointed at so
+  // far, as the request will name them.
+  const counted = (p) => p.kind === "click" || p.end - p.t >= 0.5;
+  function pointed() {
+    const pts = S.rec?.points || S.typing?.points || [];
+    const out = [];
+    for (const p of pts) if (counted(p) && p.el?.node && !out.some((q) => q.el.node === p.el.node)) out.push(p);
+    return out;
+  }
+  function drawMarks() {
+    const layer = root.querySelector("#marks");
+    const on = !!(S.rec || S.typing);
+    const want = on ? pointed() : [];
+    const hov = on && S.hover && S.hover.isConnected ? S.hover : null;
+    const boxes = [...want.map((p, i) => ({ el: p.el.node, n: i + 1 })), ...(hov && !want.some((p) => p.el.node === hov) ? [{ el: hov, n: 0 }] : [])];
+    while (layer.children.length > boxes.length) layer.lastChild.remove();
+    boxes.forEach((b, i) => {
+      let d = layer.children[i];
+      if (!d) { d = document.createElement("div"); d.className = "mark"; d.innerHTML = "<span></span>"; layer.append(d); }
+      const r = b.el.isConnected ? b.el.getBoundingClientRect() : null;
+      d.hidden = !r || (!r.width && !r.height);
+      if (d.hidden) return;
+      d.classList.toggle("hover", !b.n);
+      d.firstChild.textContent = b.n ? String(b.n) : "";
+      d.style.transform = `translate(${r.left - 3}px, ${r.top - 3}px)`;
+      d.style.width = `${r.width + 6}px`; d.style.height = `${r.height + 6}px`;
+    });
   }
 
   // Where each request in the room was made, on this page.
@@ -589,6 +646,11 @@
     });
   }
 
+  async function accept(id) {
+    const res = await realFetch("/__pay/api/accept", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    toast(res.ok ? (S.agents.length ? `In the queue. ${S.agents[0]} is waiting for it.` : "In the queue for your agents") : "Could not accept that.");
+  }
+
   async function confirm(id) {
     const res = await realFetch("/__pay/api/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
     toast(res.ok ? "Thanks. Marked as right." : "Could not save that.");
@@ -608,6 +670,7 @@
     type: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7V5h16v2M9 19h6M12 5v14"/></svg>',
     list: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>',
     lock: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
+    spark: '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.2 6.6L21 11l-6.8 2.4L12 20l-2.2-6.6L3 11l6.8-2.4z"/></svg>',
     min: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 12h12"/></svg>',
   };
 
@@ -620,19 +683,32 @@
     }[it.status] || ["muted", it.status];
   }
 
+  /** The agent in the room: working on something, or waiting for the next request. */
+  function agentNow() {
+    const busy = S.items.find((it) => it.status === "in_progress");
+    if (busy) return { short: `${busy.by || "Agent"} working`, title: `${busy.by || "An agent"} is working on “${busy.title || "a request"}…”` };
+    if (S.agents.length) return { short: `${S.agents[0]} ready`, title: `${S.agents.join(", ")} ${S.agents.length > 1 ? "are" : "is"} waiting for requests and fixes them as they come` };
+    return null;
+  }
+
   function itemsHTML() {
     if (!S.items.length) return `<p class="empty">Nothing asked yet. Press Talk, point at things on the page and say what should change.</p>`;
     return [...S.items].reverse().map((it) => {
       const [cls, text] = stateText(it), n = S.items.indexOf(it) + 1;
       const check = it.mine && it.status === "done" && !it.confirmed;
+      const accept = S.role === "owner" && it.status === "triage";
       return `<li class="${S.focus === it.id ? "focus" : ""}">
-        <div class="row"><span class="n">${n}</span><b>${esc(it.mine ? "You" : it.from)}</b>${it.private ? `<span class="priv" title="Only ${esc(S.owner)} and you see this">${ICON.lock}</span>` : ""}<span class="chip ${cls}">${esc(text)}</span></div>
-        <div class="said">${it.title ? `“${esc(it.title)}…”` : ""}</div>
+        <div class="row"><span class="n">${n}</span><b>${esc(it.mine ? "You" : it.from)}</b>${it.private ? `<span class="priv" title="Only ${esc(S.owner)} and you see this">${ICON.lock}</span>` : ""}${it.part ? `<span class="part">${esc(it.part)}</span>` : ""}<span class="chip ${cls}">${esc(text)}</span></div>
+        <div class="said">${it.title ? `“${esc(it.title.replace(/[.,;:!?]+$/, ""))}…”` : ""}</div>
         ${it.note && it.status === "done" ? `<div class="fix">${esc(it.note)}</div>` : ""}
+        ${accept ? `<div class="check"><span>${esc(it.from)} asked for this.</span><button data-accept="${esc(it.id)}" class="dark">Accept</button></div>` : ""}
         ${check ? `<div class="check"><span>Is it right now?</span><button data-ok="${esc(it.id)}" class="dark">Looks right</button><button data-no="${esc(it.id)}">Not yet</button></div>` : ""}
       </li>`;
     }).join("");
   }
+
+  // Redrawn only when it changed, so focus, a half-typed answer and hover stay put.
+  const put = (el, html) => { if (el.__h === html) return false; el.__h = html; el.innerHTML = html; return true; };
 
   function render() {
     if (!root) return;
@@ -647,45 +723,54 @@
     const faces = others.slice(0, 4).map((p) => `<span class="face${p.talking ? " talking" : ""}" style="background:${p.color}" title="${esc(p.name)}${p.talking ? " is talking" : ""}">${esc((p.name || "?")[0].toUpperCase())}</span>`).join("");
     if (S.rec) {
       const s = Math.floor(now());
-      bar.innerHTML = `<span class="dot rec"></span><span class="time">${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}</span>
-        <span class="hint">${S.rec.followUp ? "Say what is still not right." : "Point at things and talk. Clicks still work."}</span>
-        <button id="cancel" class="ghost" title="Cancel (Esc)">esc</button><button id="stop" class="dark">Done <kbd>⌥⌥</kbd></button>`;
+      put(bar, `<span class="dot rec"></span><span class="time">${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}</span>
+        <span class="hint">${S.rec.followUp ? "Say what is still not right." : pointed().length ? `${pointed().length} pointed at. Keep talking, or Done.` : "Point at things and talk. Clicks still work."}</span>
+        <button id="cancel" class="ghost" title="Cancel (Esc)">esc</button><button id="stop" class="dark">Done <kbd>⌥⌥</kbd></button>`);
     } else {
       const open = S.items.filter((it) => it.mine && it.status === "done" && !it.confirmed).length;
-      bar.innerHTML = `<span class="dot${S.connected ? " on" : ""}" title="${S.connected ? "Live" : "Reconnecting…"}"></span>
+      put(bar, `<span class="dot${S.connected ? " on" : ""}" title="${S.connected ? "Live" : "Reconnecting…"}"></span>
         <span class="who">${S.role === "owner" ? "Your live review" : `${esc(S.owner || "Live review")}'s app`}</span>${faces ? `<span class="faces">${faces}</span>` : ""}
+        ${agentNow() ? `<span class="agent" title="${esc(agentNow().title)}">${ICON.spark}<span>${esc(agentNow().short)}</span></span>` : ""}
         <button id="talk" class="dark">${ICON.mic}Talk <kbd>⌥⌥</kbd></button>
         <button id="type" class="icon" title="Type instead">${ICON.type}</button>
         ${S.privateMode || S.role === "owner" ? "" : `<button id="lock" class="icon${S.lock ? " active" : ""}" title="${S.lock ? `Private: only ${esc(S.owner)} sees your next recordings` : "Visible to everyone in the link. Press to make it private"}">${ICON.lock}</button>`}
         <button id="list" class="icon${S.panel ? " active" : ""}" title="The room's requests">${ICON.list}${S.items.length ? `<span class="count${open ? " hot" : ""}">${open || S.items.length}</span>` : ""}</button>
-        <button id="small" class="icon" title="Make the bar small">${ICON.min}</button>`;
+        <button id="small" class="icon" title="Make the bar small">${ICON.min}</button>`);
     }
     const checking = S.items.find((it) => it.id === S.check && it.status === "done" && !it.confirmed);
     if (!checking) S.check = null;
     panel.classList.toggle("compact", !!checking && !S.panel && !S.asking && !S.typing);
     panel.hidden = (!S.panel && !checking) || S.small;
+    let html = "";
     if (!panel.hidden && panel.classList.contains("compact")) {
-      panel.innerHTML = `<div class="row"><span class="n">${S.items.indexOf(checking) + 1}</span><b>Done</b><span class="said">${esc(checking.note || "")}</span></div>
+      html = `<div class="row"><span class="n">${S.items.indexOf(checking) + 1}</span><b>Done</b><span class="said">${esc(checking.note || "")}</span></div>
         <div class="check"><span>Have a look. Is it right?</span><button data-ok="${esc(checking.id)}" class="dark">Looks right</button><button data-no="${esc(checking.id)}">Not yet</button></div>`;
     } else if (!panel.hidden) {
-      if (S.asking) {
-        panel.innerHTML = `<h3>Your name</h3><p>So ${esc(S.owner || "they")} know${S.owner ? "s" : ""} who asked.</p>
+      if (S.asking?.welcome) {
+        html = `<h3>${esc(S.owner || "Someone")} is sharing their app with you</h3>
+          <p>It's the real app, running on their computer: use it as you normally would. When something should change, press <b>Talk</b>, point at it and say what. ${S.trusted ? "Their agent picks it up" : `${esc(S.owner || "They")} sees it with your name`}, and you can watch it get fixed right here.</p>
+          <form id="nameForm"><input id="name" autocomplete="name" placeholder="Your name" value="${esc(S.name)}"><button type="button" id="later" class="ghost">Not now</button><button class="dark">Join</button></form>`;
+      } else if (S.asking) {
+        html = `<h3>Your name</h3><p>So ${esc(S.owner || "they")} know${S.owner ? "s" : ""} who asked.</p>
           <form id="nameForm"><input id="name" autocomplete="name" placeholder="Your name" value="${esc(S.name)}"><button class="dark">Start</button></form>`;
-        if (nameTyped == null) setTimeout(() => root.querySelector("#name")?.focus(), 0);
       } else if (S.typing) {
-        panel.innerHTML = `<h3>Type it instead</h3><p>Click things on the page to point at them (${S.typing.points.length} so far), then say what should change.</p>
+        html = `<h3>Type it instead</h3><p>Click things on the page to point at them (${S.typing.points.length} so far), then say what should change.</p>
           <textarea id="text" rows="4" placeholder="This button should…"></textarea>
           <div class="actions"><button id="typeCancel" class="ghost">Cancel</button><button id="typeSend" class="dark">Send</button></div>`;
       } else {
         const people = S.peers.map((p) => `<span class="person"><span class="face${p.talking ? " talking" : ""}" style="background:${p.color}">${esc((p.name || "?")[0].toUpperCase())}</span>${esc(p.id === S.me ? "You" : p.name)}${p.role === "owner" ? " (owner)" : ""}${p.talking ? " · talking" : ""}</span>`).join("");
-        panel.innerHTML = `<div class="head"><h3>Requests</h3><button id="close" class="icon" title="Close">${ICON.min}</button></div>
-          <div class="people">${people}</div>
+        const ag = agentNow();
+        html = `<div class="head"><h3>Requests</h3><button id="close" class="icon" title="Close">${ICON.min}</button></div>
+          <div class="people">${people}${ag ? `<span class="person agentp">${ICON.spark}${esc(ag.title)}</span>` : S.role === "owner" ? `<span class="person muted">No agent is waiting. Ask yours to “work through Point and Yap live”.</span>` : ""}</div>
           <ul>${itemsHTML()}</ul>
-          <p class="foot">${S.role === "owner" ? "Accept guests' requests in Point and Yap on your Mac." : S.privateMode ? `Only ${esc(S.owner)} sees what you send.` : S.trusted ? "Requests go straight to the agent." : `${esc(S.owner)} accepts each request before an agent works on it.`}</p>`;
+          <p class="foot">${S.role === "owner" ? "Accept guests' requests here or in Point and Yap on your Mac." : S.privateMode ? `Only ${esc(S.owner)} sees what you send.` : S.trusted ? "Requests go straight to the agent." : `${esc(S.owner)} accepts each request before an agent works on it.`}</p>`;
         if (S.focus) setTimeout(() => { root.querySelector("li.focus")?.scrollIntoView({ block: "nearest" }); S.focus = null; }, 0);
       }
+    }
+    if (!panel.hidden && put(panel, html)) {
       if (typed != null && root.querySelector("#text")) root.querySelector("#text").value = typed;
       if (nameTyped != null && root.querySelector("#name")) root.querySelector("#name").value = nameTyped;
+      const n = root.querySelector("#name"); if (n) setTimeout(() => n.focus(), 0);
       panel.scrollTop = scroll;
     }
   }
@@ -698,13 +783,15 @@
       else if (b.id === "stop") stop();
       else if (b.id === "cancel") cancel();
       else if (b.id === "type") { S.typing = { t0: performance.now(), points: [] }; S.panel = true; render(); setTimeout(() => root.querySelector("#text")?.focus(), 0); }
+      else if (b.id === "later") { S.asking = null; S.panel = false; render(); }
       else if (b.id === "typeCancel") { S.typing = null; render(); }
       else if (b.id === "typeSend") sendTyped();
       else if (b.id === "lock") { S.lock = !S.lock; toast(S.lock ? `Private: only ${S.owner} will see it` : "Visible to everyone in the link"); }
       else if (b.id === "list" || b.id === "close") { S.panel = !S.panel; render(); }
       else if (b.id === "small") { S.small = true; S.panel = false; store.set("pay-small", "1"); render(); }
       else if (b.id === "mini") { S.small = false; store.set("pay-small", "0"); render(); }
-      else if (b.dataset.ok) { S.check = null; confirm(b.dataset.ok); render(); }
+      else if (b.dataset.ok) { const id = b.dataset.ok; S.check = S.items.find((it) => it.id !== id && it.mine && it.status === "done" && !it.confirmed)?.id || null; confirm(id); render(); }
+      else if (b.dataset.accept) accept(b.dataset.accept);
       else if (b.dataset.no) { S.check = null; start(b.dataset.no); }
     });
     root.addEventListener("submit", (e) => {
@@ -713,7 +800,8 @@
       if (!n) return;
       S.name = n.slice(0, 40); store.set("pay-name", S.name);
       send({ t: "hello", name: S.name });
-      const then = S.asking?.then; S.asking = null; S.panel = false; render();
+      const welcome = S.asking?.welcome, then = S.asking?.then; S.asking = null; S.panel = false; render();
+      if (welcome && !then) toast(`Hi ${S.name}. Press Talk (or ⌥ twice) when something should change.`, 5000);
       then?.();
     });
     // Keys typed into the bar stay in the bar.
@@ -728,8 +816,13 @@
     .cursor { position: absolute; left: 0; top: 0; transition: transform 90ms linear; }
     .cursor span { position: absolute; left: 14px; top: 16px; color: #fff; font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 6px; white-space: nowrap; }
     .cursor.talking span::after { content: " · talking"; font-weight: 400; }
+    .mark { position: absolute; left: 0; top: 0; border: 2px solid #e5484d; border-radius: 6px; background: rgba(229,72,77,.06); }
+    .mark.hover { border-style: dashed; border-color: rgba(229,72,77,.6); background: none; }
+    .mark span { position: absolute; left: -9px; top: -9px; min-width: 18px; height: 18px; border-radius: 9px; background: #e5484d; color: #fff;
+      font-size: 10px; font-weight: 700; display: grid; place-items: center; padding: 0 4px; border: 2px solid #fff; }
+    .mark.hover span { display: none; }
     .pin { position: absolute; left: 0; top: 0; width: 18px; height: 18px; border-radius: 9px; border: 2px solid #fff; padding: 0;
-      font-size: 10px; font-weight: 700; color: #fff; background: #b8860b; pointer-events: auto; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
+      font-size: 10px; font-weight: 700; color: #fff; background: #b8860b; pointer-events: auto; justify-content: center; line-height: 1; gap: 0; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
     .pin[data-state="in_progress"] { background: #5c5f66; } .pin[data-state="done"] { background: #2f7a4b; } .pin[data-state="ok"] { background: #2f7a4b; outline: 2px solid #9ad3ae; }
     .pin[data-state="triage"], .pin[data-state="processing"] { background: #1f4e8c; }
     #ui { position: fixed; left: 50%; bottom: max(14px, env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 2147483647;
@@ -770,6 +863,10 @@
     .row { display: flex; align-items: center; gap: 6px; } .row b { font-weight: 600; }
     .n { width: 18px; height: 18px; border-radius: 9px; background: #efeff1; font-size: 10px; font-weight: 700; display: inline-grid; place-items: center; }
     .priv { color: #8a8d94; display: inline-flex; }
+    .part { font-size: 11px; color: #8a8d94; }
+    .agent { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: #6e56cf; background: #f4f0fe; border: 1px solid #e1d9fb;
+      border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
+    .agentp { color: #6e56cf; } .person.muted { color: #8a8d94; }
     .chip { margin-left: auto; font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
     .chip.wait { color: #1f4e8c; background: #eef4fd; border-color: #c9dbf5; } .chip.queued { color: #6b5414; background: #fff7e0; border-color: #f3e3b5; }
     .chip.busy { color: #3a3c41; background: #f3f3f5; border-color: #e3e4e7; } .chip.done, .chip.ok { color: #2f7a4b; background: #f1faf4; border-color: #cfe8d8; }
@@ -786,14 +883,18 @@
       button.dark { background: #ececee; color: #1d1f23; border-color: #ececee; } .hint, #panel p, .people { color: #a2a5ab; }
       li { border-color: #2b2d32; } .n { background: #2b2d32; } input, textarea { background: #16171a; color: #ececee; border-color: #3a3c41; }
       .faces .face { border-color: #1f2024; } li.focus { background: #2a2617; }
+      .agent { color: #b8a6f5; background: #262040; border-color: #3a3060; } .agentp { color: #b8a6f5; }
+      .chip.wait { color: #9dbcf0; background: #1a2638; border-color: #2a3c58; } .chip.queued { color: #e6c87a; background: #2e2715; border-color: #4a3e1e; }
+      .chip.busy { color: #c9cbd0; background: #2b2d32; border-color: #3a3c41; } .chip.done, .chip.ok { color: #7fd1a0; background: #16291e; border-color: #24452f; }
+      .chip.muted { color: #8a8d94; background: #1f2024; border-color: #2b2d32; }
     }
-    @media (max-width: 520px) { .who, kbd, .hint { display: none; } }
+    @media (max-width: 520px) { .who, kbd, .hint, .agent span { display: none; } }
   `;
 
   function mount() {
     host = document.createElement("pointandyap-bar");
     root = host.attachShadow({ mode: "open" });
-    root.innerHTML = `<style>${CSS_TEXT}</style><div class="layer" id="pins"></div><div class="layer" id="cursors"></div>
+    root.innerHTML = `<style>${CSS_TEXT}</style><div class="layer" id="marks"></div><div class="layer" id="pins"></div><div class="layer" id="cursors"></div>
       <div id="ui"><div id="toast" hidden></div><div id="panel" hidden></div><div id="bar"></div><button id="mini" title="Point and Yap" hidden></button></div>`;
     const parent = () => document.body || document.documentElement;
     parent().append(host);

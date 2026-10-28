@@ -151,8 +151,9 @@ enum MCPServer {
                let words = try? JSONDecoder().decode([Word].self, from: w), !words.isEmpty {
                 line += ", \"\(words.prefix(12).map(\.text).joined(separator: " "))…\""
             }
-            if let i = Items.items(in: d, state: Items.readState(d)).items.first {
-                line += ", \(i.status.replacingOccurrences(of: "_", with: " "))\(i.by.map { " by \($0)" } ?? "")"
+            let items = Items.items(in: d, state: Items.readState(d)).items
+            if let i = Items.overall(items) {
+                line += ", \(items.count > 1 ? "\(items.count) requests, " : "")\(i.status.replacingOccurrences(of: "_", with: " "))\(i.by.map { " by \($0)" } ?? "")"
             }
             return line
         }

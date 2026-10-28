@@ -322,7 +322,7 @@ final class PointAndYapTests: XCTestCase {
         e.page = Page(url: "http://localhost:5173/", title: "Home", viewport: "390×844 @3x", browser: "Safari on iPhone", errors: ["GET /api/x → 500"])
         e.followUp = FollowUp(id: "2026-10-17_130000#1", said: "make it green", note: "Button is green", by: "claude-code")
         try JSONEncoder.pretty.encode(e).write(to: dir.appendingPathComponent("events.json"))
-        let body = try XCTUnwrap(Items.sessionItem(dir)).body
+        let body = try XCTUnwrap(Items.sessionItems(dir).first).body
         XCTAssertTrue(body.hasPrefix("From Dana (live), not the user:"), "the third-party line stays first")
         XCTAssertTrue(body.contains("Follow-up to 2026-10-17_130000#1 (\"make it green\"), which claude-code marked done with the note \"Button is green\". Dana checked it"))
         XCTAssertTrue(body.contains("drawn at `src/App.tsx:21:9`, component App > Counter"))
@@ -338,5 +338,47 @@ final class PointAndYapTests: XCTestCase {
         XCTAssertEqual(item.status, "done")
         XCTAssertTrue(item.confirmed != nil)
         Items.confirm("../etc#1")   // no such folder: nothing happens
+    }
+
+    /// The fixture with a full stop after "gray": one sentence on the Save button, then one on the date label.
+    func twoThings(_ id: String) throws -> URL {
+        let dir = session(id)
+        let url = dir.appendingPathComponent("transcript.json")
+        var w = try JSONDecoder().decode([Word].self, from: Data(contentsOf: url))
+        w[6].text = "gray."
+        try JSONEncoder().encode(w).write(to: url)
+        return dir
+    }
+
+    func testARecordingThatAsksForTwoThingsOnTwoElementsIsTwoItems() throws {
+        let dir = try twoThings("2026-10-17_160000")
+        let items = Items.items(in: dir, state: nil).items
+        XCTAssertEqual(items.map(\.id), ["2026-10-17_160000#1", "2026-10-17_160000#2"])
+        XCTAssertEqual(items[0].title, "This button should be blue, not gray.")
+        XCTAssertTrue(items[1].title.hasPrefix("and here, the date is wrong. It should say today."), "a sentence that points at nothing stays with the one before")
+        XCTAssertTrue(items[0].body.contains("[1] dwell") && !items[0].body.contains("[3] dwell"))
+        XCTAssertTrue(items[1].body.contains("[3] dwell") && !items[1].body.contains("[1] dwell"))
+        XCTAssertTrue(items[1].body.hasPrefix("Request 2 of 2 in one recording"), "an agent still sees the whole recording")
+        XCTAssertEqual(items.map(\.points), [[0], [2]])
+        // Done one at a time.
+        _ = Items.set(["2026-10-17_160000#1"], status: "done", agent: "a", note: nil)
+        XCTAssertEqual(Items.openItems(limit: 5, take: false, agent: "a").map(\.id), ["2026-10-17_160000#2"])
+        XCTAssertEqual(Items.overall(Items.items(in: dir, state: Items.readState(dir)).items)?.status, "open")
+    }
+
+    func testOneSentenceOnTwoElementsStaysOneRequest() {
+        // "This button should be blue, not gray, and here, the date is wrong.": both points, one sentence.
+        XCTAssertEqual(Items.items(in: session("2026-10-17_160001"), state: nil).items.count, 1)
+    }
+
+    func testARecordingWaitingToBeAcceptedWaitsWhole() throws {
+        let dir = try twoThings("2026-10-17_160002")
+        var st = ItemState(source: "session")
+        st.items["1"] = .init(status: "triage", by: "Dana", at: Date(), note: nil)
+        Items.writeState(st, dir)
+        XCTAssertEqual(Items.items(in: dir, state: Items.readState(dir)).items.map(\.status), ["triage", "triage"])
+        XCTAssertTrue(Items.openItems(limit: 5, take: true, agent: "a").isEmpty, "no agent takes the second request of a guest's recording")
+        _ = Items.set(["2026-10-17_160002#1", "2026-10-17_160002#2"], status: "open", agent: "you", note: nil)
+        XCTAssertEqual(Items.openItems(limit: 5, take: false, agent: "a").count, 2)
     }
 }

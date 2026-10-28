@@ -214,7 +214,7 @@ struct SessionRowView: View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.title).font(.geist(13)).foregroundStyle(Ink.primary).lineLimit(1)
-                Text("\(Self.time.string(from: row.date)) · \(row.duration) s\(row.author.map { " · from \($0)" } ?? "")")
+                Text("\(Self.time.string(from: row.date)) · \(row.duration) s\(row.requests > 1 ? " · \(row.requests) requests" : "")\(row.author.map { " · from \($0)" } ?? "")")
                     .font(.geist(11)).foregroundStyle(Ink.muted)
             }
             Spacer(minLength: 8)
@@ -320,12 +320,24 @@ struct LiveCard: View {
                 Text(state.livePeople.isEmpty ? "Nobody yet. Send the link: they use your app in their browser, point and talk."
                      : "In it: \(state.livePeople.joined(separator: ", ")). Their requests show up below.")
                     .font(.geist(12)).foregroundStyle(Ink.muted).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    Circle().fill(state.liveAgents.isEmpty ? Ink.faint : Color(hex: 0x30A46C)).frame(width: 6, height: 6)
+                    Text(state.liveAgents.isEmpty ? "No agent is waiting for requests" : "\(state.liveAgents.joined(separator: ", ")) is waiting for requests")
+                        .font(.geist(12)).foregroundStyle(Ink.muted)
+                    Spacer()
+                    if state.liveAgents.isEmpty {
+                        Button("Copy for your agent") { state.copyAgentPrompt() }.buttonStyle(SmallButton())
+                            .help(AppState.liveAgentPrompt)
+                    }
+                }
                 HStack {
                     Toggle("Send their requests straight to agents", isOn: Binding(get: { live.trusted }, set: { live.trusted = $0; state.objectWillChange.send() }))
                         .toggleStyle(.switch).controlSize(.mini).font(.geist(12)).foregroundStyle(Ink.muted)
                     Spacer()
                     Button("Open as me") { state.openLiveAsMe() }.buttonStyle(.plain).font(.geist(12)).foregroundStyle(Ink.muted).underline()
                 }
+                Text("Anyone with the link can use your dev server, its API routes included, until you end it. The link goes through Cloudflare.")
+                    .font(.geist(11)).foregroundStyle(Ink.faint).fixedSize(horizontal: false, vertical: true)
             } else if state.liveStarting {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)

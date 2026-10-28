@@ -18,9 +18,17 @@ if [ -z "$APP" ]; then
 fi
 cp "$APP/src/App.tsx" "$T/App.tsx.orig"
 PORT=5174
-(cd "$APP" && npx vite --port $PORT --strictPort >"$T/vite.log" 2>&1) &
+if lsof -ti tcp:$PORT -sTCP:LISTEN >/dev/null; then echo "FAIL: port $PORT is already in use (an old test's dev server?)"; exit 1; fi
+(cd "$APP" && exec npx vite --port $PORT --strictPort >"$T/vite.log" 2>&1) &
 VITE=$!
-trap 'kill $VITE $LIVE 2>/dev/null; cp "$T/App.tsx.orig" "$APP/src/App.tsx"' EXIT
+# npx starts vite as its own process: whatever listens on the port goes too.
+LIVE=
+cleanup() {
+  kill $VITE $LIVE 2>/dev/null || true
+  lsof -ti tcp:$PORT -sTCP:LISTEN | xargs kill 2>/dev/null || true
+  cp "$T/App.tsx.orig" "$APP/src/App.tsx" || true
+}
+trap cleanup EXIT
 until curl -s -o /dev/null "http://localhost:$PORT"; do sleep 0.5; done
 
 "$B" --live $PORT --from Owner $([ -n "${LIVE_TUNNEL:-}" ] || echo --no-tunnel) >"$T/live.log" 2>&1 &
@@ -29,7 +37,11 @@ until grep -q "__pay/k/" "$T/live.log"; do sleep 0.5; done
 LINK=$(grep -o 'https\?://[^ ]*/__pay/k/[A-Za-z0-9_-]*' "$T/live.log" | head -1)
 echo "link: $LINK"
 
-say -o "$T/guest.wav" --data-format=LEI16@48000 "This counter button should be green."
+if [ -n "${TWO:-}" ]; then
+  say -o "$T/guest.wav" --data-format=LEI16@48000 "This counter button should be green. [[slnc 1400]] And the heading should say hello Dana. [[slnc 9000]]"
+else
+  say -o "$T/guest.wav" --data-format=LEI16@48000 "This counter button should be green. [[slnc 9000]]"
+fi
 node relay/test/live-guest.mjs "$LINK" "$T/guest.wav" "$T" both >"$T/guest.log" 2>&1 &
 GUEST=$!
 
@@ -37,7 +49,15 @@ GUEST=$!
 for _ in $(seq 1 60); do ITEM=$("$B" --items | grep -m1 '\[triage\] from Dana' | cut -d' ' -f2 || true); [ -n "$ITEM" ] && break; sleep 1; done
 [ -n "$ITEM" ] || { cat "$T/guest.log"; echo "FAIL: no item from the guest"; exit 1; }
 "$B" --items | grep -q 'drawn at `src/App.tsx:' || { "$B" --items; echo "FAIL: the point has no source line"; exit 1; }
-"$B" --accept "$ITEM"
+if [ -n "${TWO:-}" ]; then
+  # Two requests from one recording; the owner accepts it from their own browser's bar.
+  "$B" --items | grep -c '\[triage\] from Dana' | grep -qx 2 || { "$B" --items; echo "FAIL: not two requests"; exit 1; }
+  OWNER=$(grep -o 'http://127.0.0.1:[0-9]*/__pay/k/[A-Za-z0-9_-]*' "$T/live.log" | tail -1)
+  curl -s -c "$T/jar" -o /dev/null "$OWNER"
+  curl -s -b "$T/jar" -H 'Content-Type: application/json' -d "{\"id\":\"$ITEM\"}" "${OWNER%%/__pay/*}/__pay/api/accept" | grep -q '"ok":true' || { echo "FAIL: accept from the bar"; exit 1; }
+else
+  "$B" --accept "$ITEM"
+fi
 
 node relay/test/live-agent.mjs "$B" "$APP"
 wait $GUEST || { cat "$T/guest.log"; echo "FAIL: the guest did not see and confirm the fix"; exit 1; }

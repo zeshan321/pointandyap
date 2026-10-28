@@ -15,6 +15,7 @@ struct SessionRow: Identifiable, Equatable {
     var noSpeech = false
     var author: String?   // someone else's recording
     var confirmed = false // they looked at the fix and said yes (live review)
+    var requests = 1      // the things it asks for, each its own item
 }
 
 @MainActor
@@ -68,6 +69,8 @@ final class AppState: ObservableObject {
     @Published var liveStarting = false
     /// Who is in the live link now (guests' names).
     @Published var livePeople: [String] = []
+    /// Agents waiting for what they ask (wait_for_items) right now.
+    @Published var liveAgents: [String] = []
 
     struct DevServer: Identifiable, Equatable { var port: Int; var name: String; var id: Int { port } }
 
@@ -89,7 +92,14 @@ final class AppState: ObservableObject {
             Task { @MainActor in
                 guard let self, let session else { return }
                 self.livePeople = await session.room.names
+                self.liveAgents = await session.room.agents
                 self.loadSessions()
+            }
+        }
+        session.onRequest = { [weak self] name, titles in
+            Task { @MainActor in
+                Sounds.play("done")
+                self?.say(titles.count == 1 ? "\(name): \"\(titles[0])…\"" : "\(name) asked for \(titles.count) things")
             }
         }
         liveStarting = true
@@ -113,8 +123,13 @@ final class AppState: ObservableObject {
         live?.stop()
         live = nil
         livePeople = []
+        liveAgents = []
         say("Live link ended")
     }
+
+    /// What to tell an agent so it fixes things as they are asked.
+    static let liveAgentPrompt = "Work through Point and Yap live: call the pointandyap MCP wait_for_items, fix each item, mark_done it with a note, and wait again until I say stop."
+    func copyAgentPrompt() { copy(Self.liveAgentPrompt); say("Copied. Paste it into your agent") }
 
     func copyLiveLink() { if let l = live?.guestLink { copy(l); say("Copied") } }
     func openLiveAsMe() { if let l = live?.ownerLink, let u = URL(string: l) { NSWorkspace.shared.open(u) } }
@@ -217,7 +232,7 @@ final class AppState: ObservableObject {
     static func pointer(_ dir: URL) -> String {
         let open = Items.all().filter { $0.status == "open" }.count
         let title = Items.items(in: dir, state: nil).items.first?.title ?? "a recording"
-        return "New in Point and Yap: \"\(title)…\"\(open > 1 ? " (\(open) recordings to fix)" : "")\n"
+        return "New in Point and Yap: \"\(title)…\"\(open > 1 ? " (\(open) to fix)" : "")\n"
             + "Fix them all: the pointandyap MCP get_open_items, then mark_done each when it is fixed. "
             + "Without the MCP: \(QueueCLI.binary) --items, and --done <id> --note \"what changed\"."
     }
@@ -323,10 +338,10 @@ final class AppState: ObservableObject {
             } else if self.phase == .processing {
                 title = "Processing…"
             }
-            let item = Items.items(in: dir, state: Items.readState(dir)).items.first
+            let items = Items.items(in: dir, state: Items.readState(dir)).items, item = Items.overall(items)
             return SessionRow(dir: dir, date: e.started, duration: Int(e.duration.rounded()), points: e.points.count,
                               title: title, status: item?.status ?? "", by: item?.by, note: item?.note,
-                              noSpeech: title == "No speech", author: e.author?.name, confirmed: item?.confirmed != nil)
+                              noSpeech: title == "No speech", author: e.author?.name, confirmed: item?.confirmed != nil, requests: items.count)
         }) {
             rows.append(row)
             if rows.filter({ !$0.noSpeech }).count == 20 { break }
