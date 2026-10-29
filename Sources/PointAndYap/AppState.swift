@@ -96,6 +96,7 @@ final class AppState: ObservableObject {
                 self.loadSessions()
             }
         }
+        session.onEnd = { [weak self] in Task { @MainActor in self?.endLive() } }
         session.onRequest = { [weak self] name, titles in
             Task { @MainActor in
                 Sounds.play("done")
@@ -138,6 +139,10 @@ final class AppState: ObservableObject {
     @Published var askAgents: [String] = []
 
     private var recorder: Recorder?
+    private var marks: MarksOverlay?
+    /// While recording: how many things are pointed at, and whether the next drag draws an area.
+    @Published var pointed = 0
+    @Published var areaOn = false
     var onRecordingChanged: ((Bool) -> Void)?
     /// The pill's frame in global top-left points: clicks there are not points.
     var ownUI: (() -> CGRect?)?
@@ -148,15 +153,29 @@ final class AppState: ObservableObject {
         mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         screen = CGPreflightScreenCaptureAccess()
         ax = AXProbe.trusted
+        // Once granted, a later reset (a reinstall) should show the system dialog again, which adds the app to the list.
+        if screen { UserDefaults.standard.removeObject(forKey: "asked.screen") }
+        if ax { UserDefaults.standard.removeObject(forKey: "asked.ax") }
     }
 
     func askMic() { Task { _ = await AudioRecorder.askForAccess(); refreshAccess() } }
+    /// The first click shows the system's own dialog, which has its own Open System Settings button; later clicks
+    /// open Settings directly. Doing both at once opened two of everything.
     func askScreen() {
         Relaunch.armForGrant()
-        if !CGRequestScreenCaptureAccess() { openSettings("Privacy_ScreenCapture") }
+        if firstAsk("screen") { CGRequestScreenCaptureAccess() } else { openSettings("Privacy_ScreenCapture") }
         refreshAccess()
     }
-    func askAX() { Relaunch.armForGrant(); AXProbe.askForTrust(); openSettings("Privacy_Accessibility") }
+    func askAX() {
+        Relaunch.armForGrant()
+        if firstAsk("ax") { AXProbe.askForTrust() } else { openSettings("Privacy_Accessibility") }
+    }
+
+    private func firstAsk(_ what: String) -> Bool {
+        let key = "asked.\(what)"
+        defer { UserDefaults.standard.set(true, forKey: key) }
+        return !UserDefaults.standard.bool(forKey: key)
+    }
 
     private func openSettings(_ pane: String) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { NSWorkspace.shared.open(url) }
@@ -171,6 +190,9 @@ final class AppState: ObservableObject {
             return
         }
         recorder = r
+        let m = MarksOverlay(recorder: r)
+        m.onChange = { [weak self, weak m] in guard let self, let m else { return }; self.pointed = m.count; self.areaOn = m.areaOn }
+        marks = m
         phase = .recording(Date())
         Sounds.play("start")
         onRecordingChanged?(true)
@@ -180,12 +202,19 @@ final class AppState: ObservableObject {
     func cancel() {
         guard case .recording = phase, let r = recorder else { return }
         recorder = nil
+        endMarks()
         r.cancel()
         phase = .idle
         onRecordingChanged?(false)
         if Prefs.sounds { NSSound(named: "Pop")?.play() }
         loadSessions()
     }
+
+    private func endMarks() { marks?.close(); marks = nil; pointed = 0; areaOn = false }
+    /// The pill's Area: the next drag draws an area (⌥-drag does it without the button).
+    func toggleArea() { marks?.areaOn.toggle() }
+    /// The pill's undo: takes back the last thing pointed at (⌥-click a number for any other).
+    func takeBackLast() { if pointed > 0 { recorder?.takeBack(pointed) } }
 
     /// Double Control: start when idle, stop while recording.
     func toggle() {
@@ -199,6 +228,7 @@ final class AppState: ObservableObject {
     func stop() {
         guard case .recording = phase, let r = recorder else { return }
         recorder = nil
+        endMarks()
         phase = .processing
         onRecordingChanged?(false)
         Task {

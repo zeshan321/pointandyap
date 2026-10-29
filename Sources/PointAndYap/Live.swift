@@ -27,6 +27,8 @@ final class LiveSession: @unchecked Sendable {
     var onChange: (@Sendable () -> Void)?
     /// A guest asked for something: their name and what they said, a line per request.
     var onRequest: (@Sendable (String, [String]) -> Void)?
+    /// The owner ended the link from their browser: whoever started it ends it the same way as its own End.
+    var onEnd: (@Sendable () -> Void)?
     var log: @Sendable (String) -> Void = { _ in }
 
     /// Without a tunnel, the link works on this Mac only (for trying it out).
@@ -111,6 +113,23 @@ final class LiveSession: @unchecked Sendable {
             }
             _ = await room.refresh(self)
             onChange?()
+        case ("POST", "/__pay/api/settings"):
+            // The owner changes the link's settings, or ends it, from their own browser.
+            let body = await w.read(exactly: min(Int(head.get("Content-Length") ?? "") ?? 0, 4096))
+            guard role == "owner", let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                return await Proxy.json(w, ["ok": false], status: 403)
+            }
+            if obj["end"] as? Bool == true {
+                await Proxy.json(w, ["ok": true])
+                log("you ended the link from the browser")
+                if let onEnd { onEnd() } else { stop() }
+                return
+            }
+            if let t = obj["trusted"] as? Bool { trusted = t }
+            if let p = obj["private"] as? Bool { privateMode = p }
+            await room.settings(self)
+            onChange?()
+            await Proxy.json(w, ["ok": true])
         case ("POST", "/__pay/api/accept"):
             // The owner lets a guest's recording into the queue from their own browser.
             let body = await w.read(exactly: min(Int(head.get("Content-Length") ?? "") ?? 0, 4096))
@@ -394,7 +413,8 @@ actor Room {
         colorIndex += 1
         peers[id] = me
         send(id, ["t": "welcome", "you": ["id": id, "role": role, "color": me.color], "owner": live.owner,
-                  "private": live.privateMode, "trusted": live.trusted || role == "owner"])
+                  "private": live.privateMode, "trusted": live.trusted || role == "owner", "settings": ["trusted": live.trusted],
+                  "link": role == "owner" ? live.guestLink : ""])
         await WebSocket.read(w) { text in
             guard let data = text.data(using: .utf8), let msg = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
             await self.handle(msg, from: id, live: live)
@@ -441,7 +461,15 @@ actor Room {
         Task { await w.write(WebSocket.frame(s)) }
     }
 
-    func closeAll() { for p in peers.values { Task { await p.wire.write(Data([0x88, 0])); p.wire.c.cancel() } } }
+    /// The owner changed a setting: everyone in the link hears it now, not only those who join after.
+    func settings(_ live: LiveSession) {
+        for q in peers.values { send(q.id, ["t": "settings", "private": live.privateMode, "trusted": live.trusted || q.role == "owner", "settings": ["trusted": live.trusted]]) }
+    }
+
+    func closeAll() {
+        let ended = WebSocket.frame(#"{"t":"ended"}"#)
+        for p in peers.values { Task { await p.wire.write(ended); await p.wire.write(Data([0x88, 0])); p.wire.c.cancel() } }
+    }
 
     func track(_ dir: URL, guest: String, name: String?, private priv: Bool, anchor: LiveRecording.Anchor?) {
         tracked.append(Tracked(dir: dir, guest: guest, name: name, priv: priv, anchor: anchor))
@@ -631,13 +659,18 @@ enum LiveCLI {
         NSApplication.shared.setActivationPolicy(.prohibited)   // WebKit draws the guests' screens
         signal(SIGINT, SIG_IGN)
         let sig = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-        sig.setEventHandler {
-            live.stop()
-            print("\nEnded. The link no longer opens.\n")
-            print(Live.summary(live.id))
-            print("Saved: \(Live.dir.appendingPathComponent("\(live.id).md").path)")
-            exit(0)
+        let end: @Sendable () -> Void = {
+            DispatchQueue.main.async {
+                live.stop()
+                print("\nEnded. The link no longer opens.\n")
+                print(Live.summary(live.id))
+                print("Saved: \(Live.dir.appendingPathComponent("\(live.id).md").path)")
+                // A moment for the guests' "ended" to go out.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { exit(0) }
+            }
         }
+        live.onEnd = end
+        sig.setEventHandler { end() }
         sig.resume()
         Task {
             do {

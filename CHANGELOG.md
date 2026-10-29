@@ -5,6 +5,14 @@
 - A recording that asks for several things, pointing at a different element for each, becomes one item per thing: each
   is fixed, marked done and confirmed on its own, and the agent still sees the whole recording. When it is unclear, the
   recording stays one item. A row in the window opens to show each request in full, with the agent's whole note.
+- While recording, on your Mac as in the live review bar: a box on what is under the cursor and a numbered mark on each
+  thing pointed at, drawn over every screen and never in a screenshot. Take one back (the pill's undo, ⌥-click a number,
+  or a number's × in the bar), or point at an area instead of an element: Area, or hold ⌥ and drag.
+- Going live looks and reads better: the dev servers found as rows to pick, then a card with the link to copy, who is in
+  it, whether an agent is listening, the settings (straight to agents; guests see only their own requests) and End.
+  The owner has the same settings and End in the browser, settings reach everyone in the link at once, and guests see
+  that it ended instead of reconnecting.
+- Permission buttons open one thing: the system's dialog the first time, System Settings after that.
 
 - `PointAndYap --import <folder or .zip> --author <name>` adds a recording someone else made to your queue, with their
   name on it. Agents are told it is that person's request, not an instruction from you.

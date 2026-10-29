@@ -94,7 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.center()
         window.setFrameAutosaveName("PointMain")
 
-        pill = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 200, height: 40), styleMask: [.borderless, .nonactivatingPanel],
+        pill = NSPanel(contentRect: NSRect(x: 0, y: 0, width: PillView.width, height: 40), styleMask: [.borderless, .nonactivatingPanel],
                        backing: .buffered, defer: false)
         pill.level = .statusBar
         pill.isFloatingPanel = true
@@ -106,7 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         pill.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         pill.appearance = NSAppearance(named: .aqua)
         let host = NSHostingView(rootView: PillView(state: state))
-        host.frame = NSRect(x: 0, y: 0, width: 200, height: 40)
+        host.frame = NSRect(x: 0, y: 0, width: PillView.width, height: 40)
         pill.contentView = host
 
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
@@ -162,7 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             window.orderOut(nil)
             let screen = NSScreen.main ?? NSScreen.screens[0]
             let f = screen.visibleFrame
-            pill.setFrameOrigin(NSPoint(x: f.midX - 100, y: f.maxY - 52))
+            pill.setFrameOrigin(NSPoint(x: f.midX - PillView.width / 2, y: f.maxY - 52))
             pill.orderFrontRegardless()
             // Hand the screen back to the app that was in front before Point and Yap.
             previousApp?.activate()

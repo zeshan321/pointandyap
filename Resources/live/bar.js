@@ -227,13 +227,18 @@
   /** The element worth naming at a point: the control around a tapped icon or label text. */
   function pick(x, y) {
     let el = at(x, y);
-    if (!el || isOurs(el) || el === document.documentElement) return null;
+    if (!el || isOurs(el) || el === document.documentElement || el === document.body) return null;
     const ctl = el.closest("button, a[href], input, select, textarea, summary, label, [role], [data-testid]");
     if (ctl && ctl !== document.body) {
       let d = 0; for (let e = el; e && e !== ctl; e = e.parentElement) d++;
       if (d <= 4) el = ctl;
     }
-    return el;
+    return backdrop(el) ? null : el;
+  }
+  /** A wrapper that fills most of the window: resting on empty space, not on a thing. */
+  function backdrop(el) {
+    const r = el.getBoundingClientRect();
+    return r.width * r.height > 0.6 * innerWidth * innerHeight && !el.closest("button, a[href], input, select, textarea, img, video, canvas, [role]");
   }
 
   /** How the bar names an element to the person pointing: what they will see in the request. */
@@ -244,7 +249,9 @@
 
   function describe(x, y) {
     const el = pick(x, y);
-    if (!el) return null;
+    return el ? describeEl(el) : null;
+  }
+  function describeEl(el) {
     const r = el.getBoundingClientRect();
     const fw = framework(el);
     const out = {
@@ -334,6 +341,7 @@
   let anchor = null, resting = null, lastPointer = null;
   addEventListener("pointermove", (e) => {
     if (e.pointerType !== "touch") lastPointer = isOurs(e.target) ? null : { x: e.clientX, y: e.clientY };
+    if (S.rec && isOurs(e.target)) { if (resting) { resting.end = r3(now()); resting = null; } anchor = null; }
     if ((!S.rec && !S.typing) || e.pointerType === "touch" || isOurs(e.target)) { if (S.hover) S.hover = null; return; }
     S.hover = pick(e.clientX, e.clientY);
     if (!S.rec) return;
@@ -343,6 +351,7 @@
     }
   }, true);
   addEventListener("pointerdown", (e) => {
+    if ((S.rec || S.typing) && e.altKey && e.button === 0 && !isOurs(e)) { e.preventDefault(); e.stopImmediatePropagation(); lastAlt = 0; areaFrom(e); return; }
     if (!S.rec || isOurs(e)) return;
     // Before the app reacts to it: the snapshot shows what they pressed on. The click itself goes on to the app.
     if (resting) { resting.end = r3(now()); resting = null; }
@@ -354,6 +363,38 @@
     if (anchor && !resting && now() - anchor.t >= REST_S) { resting = point("dwell", anchor.x, anchor.y); if (resting) resting.t = r3(anchor.t); }
     if (resting) resting.end = r3(now());
   }, 50);
+
+  // A dragged box: the area is what they point at, named by the smallest element around it.
+  function pointArea(r) {
+    const pts = S.rec?.points || S.typing?.points;
+    if (!pts) return;
+    let el = at(r.x + r.w / 2, r.y + r.h / 2);
+    for (; el && el !== document.body; el = el.parentElement) {
+      const b = el.getBoundingClientRect();
+      if (b.left <= r.x + 2 && b.top <= r.y + 2 && b.right >= r.x + r.w - 2 && b.bottom >= r.y + r.h - 2) break;
+    }
+    const d = describeEl(el || document.body);
+    d.rect = { x: r.x, y: r.y, w: r.w, h: r.h };
+    const rec = S.rec || { t0: S.typing.t0, points: [], snaps: new Map() }, typing = !S.rec;
+    if (typing) S.rec = rec;   // for snapshot()
+    const t = r3((performance.now() - rec.t0) / 1000);
+    dirty = true;
+    const snap = snapshot(t);
+    if (typing) { S.rec = null; S.typing.snaps = S.typing.snaps || new Map(); if (snap) S.typing.snaps.set(snap.id, snap); }
+    const p = { t, end: t, kind: "click", x: Math.round(r.x + r.w / 2), y: Math.round(r.y + r.h / 2), snap: snap?.id || null, el: d };
+    Object.defineProperty(p, "box", { value: { x: r.x + scrollX, y: r.y + scrollY, w: r.w, h: r.h }, enumerable: false });
+    pts.push(p);
+  }
+
+  /** Takes back the n-th mark: everything that pointed at that element (or that area) no longer counts. */
+  function unmark(n) {
+    const pts = S.rec?.points || S.typing?.points, gone = pointed()[n - 1];
+    if (!pts || !gone) return;
+    const key = markKey(gone);
+    for (let i = pts.length - 1; i >= 0; i--) if (markKey(pts[i]) === key) { if (pts[i] === resting) resting = null; pts.splice(i, 1); }
+    anchor = null;   // or resting there a moment longer would put it straight back
+    render();
+  }
 
   async function start(followUp = null) {
     if (S.rec) return;
@@ -376,6 +417,34 @@
     render();
   }
 
+  function areaMode(on) {
+    S.area = on;
+    const ov = root.querySelector("#area");
+    ov.hidden = !on; ov.firstChild.hidden = true;
+    render();
+  }
+  let areaFrom = () => {};
+  function wireArea() {
+    const ov = root.querySelector("#area"), box = ov.firstChild;
+    let from = null;
+    areaFrom = (e) => { areaMode(true); from = { x: e.clientX, y: e.clientY }; };
+    const rect = (e) => ({ x: Math.min(from.x, e.clientX), y: Math.min(from.y, e.clientY), w: Math.abs(e.clientX - from.x), h: Math.abs(e.clientY - from.y) });
+    ov.addEventListener("pointerdown", (e) => { from = { x: e.clientX, y: e.clientY }; ov.setPointerCapture(e.pointerId); e.preventDefault(); });
+    ov.addEventListener("pointermove", (e) => {
+      if (!from) return;
+      const r = rect(e);
+      box.hidden = false;
+      box.style.transform = `translate(${r.x}px, ${r.y}px)`; box.style.width = `${r.w}px`; box.style.height = `${r.h}px`;
+    });
+    ov.addEventListener("pointerup", (e) => {
+      if (!from) return;
+      const r = rect(e);
+      from = null;
+      if (r.w >= 8 && r.h >= 8) pointArea(r);
+      areaMode(false);
+    });
+  }
+
   function end() {
     const r = S.rec;
     clearInterval(r.tick);
@@ -383,7 +452,7 @@
     send({ t: "talking", on: false });
   }
 
-  function cancel() { if (!S.rec) return; end(); S.rec = null; render(); }
+  function cancel() { if (!S.rec) return; end(); S.rec = null; areaMode(false); }
 
   async function stop() {
     if (!S.rec) return;
@@ -391,6 +460,7 @@
     if (resting) resting.end = r3(duration);
     end();
     S.rec = null; resting = null; anchor = null;
+    if (S.area) areaMode(false);
     const points = r.points.filter((p) => p.kind === "click" || p.end - p.t >= 0.5);
     render();
     await upload({ duration: r3(duration), points, snaps: r.snaps, audio: b64(wav(r.chunks, r.rate)), followUp: r.followUp, private: r.lock });
@@ -475,6 +545,7 @@
   // ⌥ twice (Alt on Windows) starts and stops, as Control twice does in the Mac app; Esc cancels.
   let lastAlt = 0, other = false;
   addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && S.area) { areaMode(false); return; }
     if (e.key === "Escape" && S.rec) { cancel(); return; }
     if (e.key !== "Alt") { other = true; return; }
     if (e.repeat) return;
@@ -490,7 +561,7 @@
   function connect() {
     ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/__pay/ws`);
     ws.onopen = () => { S.connected = true; wait = 500; if (S.name) send({ t: "hello", name: S.name }); render(); };
-    ws.onclose = () => { S.connected = false; render(); setTimeout(connect, (wait = Math.min(wait * 2, 8000))); };
+    ws.onclose = () => { S.connected = false; render(); if (!S.ended) setTimeout(connect, (wait = Math.min(wait * 2, 8000))); };
     ws.onmessage = (m) => { let msg; try { msg = JSON.parse(m.data); } catch { return; } on(msg); };
   }
   const send = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
@@ -498,9 +569,12 @@
   function on(msg) {
     if (msg.t === "welcome") {
       S.me = msg.you.id; S.role = msg.you.role; S.owner = msg.owner; S.privateMode = msg.private; S.trusted = msg.trusted;
+      S.link = msg.link || ""; S.straight = !!msg.settings?.trusted;
       if (S.role === "owner") { S.name = msg.owner; send({ t: "hello", name: msg.owner }); }
       else if (!S.name && !S.welcomed) { S.welcomed = true; store.set("pay-welcomed", "1"); S.asking = { welcome: true }; S.panel = true; }
-    } else if (msg.t === "peers") S.peers = msg.peers;
+    } else if (msg.t === "settings") { S.privateMode = msg.private; S.trusted = msg.trusted; S.straight = !!msg.settings?.trusted; }
+    else if (msg.t === "ended") { S.ended = true; if (S.rec) cancel(); S.typing = null; S.panel = false; S.asking = null; }
+    else if (msg.t === "peers") S.peers = msg.peers;
     else if (msg.t === "cursor") { cursors.set(msg.id, { ...msg, at: performance.now() }); return; }
     else if (msg.t === "items") {
       // The list first: a toast below redraws, and the bar must already show what this message says.
@@ -597,10 +671,11 @@
   // While recording (or typing): a box on what is under the pointer, and a numbered mark on each thing pointed at so
   // far, as the request will name them.
   const counted = (p) => p.kind === "click" || p.end - p.t >= 0.5;
+  const markKey = (p) => p.box || p.el?.node;
   function pointed() {
     const pts = S.rec?.points || S.typing?.points || [];
     const out = [];
-    for (const p of pts) if (counted(p) && p.el?.node && !out.some((q) => q.el.node === p.el.node)) out.push(p);
+    for (const p of pts) if (counted(p) && markKey(p) && !out.some((q) => markKey(q) === markKey(p))) out.push(p);
     return out;
   }
   function drawMarks() {
@@ -608,16 +683,19 @@
     const on = !!(S.rec || S.typing);
     const want = on ? pointed() : [];
     const hov = on && S.hover && S.hover.isConnected ? S.hover : null;
-    const boxes = [...want.map((p, i) => ({ el: p.el.node, n: i + 1 })), ...(hov && !want.some((p) => p.el.node === hov) ? [{ el: hov, n: 0 }] : [])];
+    const boxes = [...want.map((p, i) => ({ p, el: p.el.node, n: i + 1 })), ...(hov && !S.area && !want.some((p) => !p.box && p.el.node === hov) ? [{ el: hov, n: 0 }] : [])];
     while (layer.children.length > boxes.length) layer.lastChild.remove();
     boxes.forEach((b, i) => {
       let d = layer.children[i];
-      if (!d) { d = document.createElement("div"); d.className = "mark"; d.innerHTML = "<span></span>"; layer.append(d); }
-      const r = b.el.isConnected ? b.el.getBoundingClientRect() : null;
+      if (!d) { d = document.createElement("div"); d.className = "mark"; d.innerHTML = `<button class="num" title="Take this one back"></button>`; layer.append(d); }
+      const a = b.p?.box;
+      const r = a ? { left: a.x - scrollX, top: a.y - scrollY, width: a.w, height: a.h } : b.el.isConnected ? b.el.getBoundingClientRect() : null;
       d.hidden = !r || (!r.width && !r.height);
       if (d.hidden) return;
       d.classList.toggle("hover", !b.n);
+      d.classList.toggle("area", !!a);
       d.firstChild.textContent = b.n ? String(b.n) : "";
+      d.firstChild.dataset.unmark = b.n || "";
       d.style.transform = `translate(${r.left - 3}px, ${r.top - 3}px)`;
       d.style.width = `${r.width + 6}px`; d.style.height = `${r.height + 6}px`;
     });
@@ -666,6 +744,9 @@
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const ICON = {
+    check: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>',
+    eye: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+    area: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="3 3"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>',
     mic: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/></svg>',
     type: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7V5h16v2M9 19h6M12 5v14"/></svg>',
     list: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>',
@@ -689,6 +770,23 @@
     if (busy) return { short: `${busy.by || "Agent"} working`, title: `${busy.by || "An agent"} is working on “${busy.title || "a request"}…”` };
     if (S.agents.length) return { short: `${S.agents[0]} ready`, title: `${S.agents.join(", ")} ${S.agents.length > 1 ? "are" : "is"} waiting for requests and fixes them as they come` };
     return null;
+  }
+
+  /** The owner's view of the link: share it, change how it works, end it. */
+  function sessionHTML() {
+    const sw = (key, on, title, detail) => `<button class="setting" data-set="${key}" aria-pressed="${on}"><span><b>${title}</b><small>${detail}</small></span><i class="switch${on ? " on" : ""}"></i></button>`;
+    return `<div class="session">
+      <div class="srow"><span class="livebadge"><i></i>LIVE</span><code title="${esc(S.link)}">${esc(S.link.replace(/^https?:\/\//, ""))}</code><button id="copyLink">${S.copied ? "Copied" : "Copy link"}</button></div>
+      ${sw("trusted", S.straight, "Send requests straight to agents", S.straight ? "Guests' requests go to the queue as they come." : "You accept each request first.")}
+      ${sw("private", S.privateMode, "Guests see only their own requests", S.privateMode ? "Each guest sees what they asked for." : "Everyone in the link sees every request.")}
+      ${S.ending ? `<div class="ending"><span>End the link for everyone? It stops opening right away.</span><button id="endNo" class="ghost">Keep it</button><button id="endYes" class="danger">End</button></div>`
+        : `<button id="endLive" class="danger ghosty">End live review</button>`}
+    </div>`;
+  }
+
+  async function setting(body) {
+    try { await realFetch("/__pay/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
+    catch { toast("Could not change it. Is the link still live?"); }
   }
 
   function itemsHTML() {
@@ -721,10 +819,14 @@
     bar.hidden = S.small && !S.rec;
     const others = S.peers.filter((p) => p.id !== S.me);
     const faces = others.slice(0, 4).map((p) => `<span class="face${p.talking ? " talking" : ""}" style="background:${p.color}" title="${esc(p.name)}${p.talking ? " is talking" : ""}">${esc((p.name || "?")[0].toUpperCase())}</span>`).join("");
-    if (S.rec) {
+    if (S.ended) {
+      put(bar, `<span class="dot"></span><span class="who">${S.role === "owner" ? "You ended the live review" : `${esc(S.owner || "They")} ended the live review`}</span>
+        <span class="hint">${S.role === "owner" ? "The link no longer opens." : "Thanks for the feedback."}</span>`);
+    } else if (S.rec) {
       const s = Math.floor(now());
       put(bar, `<span class="dot rec"></span><span class="time">${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}</span>
-        <span class="hint">${S.rec.followUp ? "Say what is still not right." : pointed().length ? `${pointed().length} pointed at. Keep talking, or Done.` : "Point at things and talk. Clicks still work."}</span>
+        <span class="hint">${S.area ? "Drag a box over the area. Esc to stop." : pointed().length ? `${pointed().length} pointed at. Click a number to take it back.` : S.rec.followUp ? "Say what is still not right." : "Point at things and talk. ⌥-drag for an area."}</span>
+        <button id="areaBtn" class="ghost${S.area ? " on" : ""}" title="Drag a box over an area (or hold ⌥ and drag)">${ICON.area}Area</button>
         <button id="cancel" class="ghost" title="Cancel (Esc)">esc</button><button id="stop" class="dark">Done <kbd>⌥⌥</kbd></button>`);
     } else {
       const open = S.items.filter((it) => it.mine && it.status === "done" && !it.confirmed).length;
@@ -756,7 +858,7 @@
         html = `<h3>Your name</h3><p>So ${esc(S.owner || "they")} know${S.owner ? "s" : ""} who asked.</p>
           <form id="nameForm"><input id="name" autocomplete="name" placeholder="Your name" value="${esc(S.name)}"><button class="dark">Start</button></form>`;
       } else if (S.typing) {
-        html = `<h3>Type it instead</h3><p>Click things on the page to point at them (${S.typing.points.length} so far), then say what should change.</p>
+        html = `<h3>Type it instead</h3><p>Click things on the page to point at them, or <button id="areaBtn" class="link">drag a box</button> over an area (${pointed().length} so far), then say what should change.</p>
           <textarea id="text" rows="4" placeholder="This button should…"></textarea>
           <div class="actions"><button id="typeCancel" class="ghost">Cancel</button><button id="typeSend" class="dark">Send</button></div>`;
       } else {
@@ -765,7 +867,9 @@
         html = `<div class="head"><h3>Requests</h3><button id="close" class="icon" title="Close">${ICON.min}</button></div>
           <div class="people">${people}${ag ? `<span class="person agentp">${ICON.spark}${esc(ag.title)}</span>` : S.role === "owner" ? `<span class="person muted">No agent is waiting. Ask yours to “work through Point and Yap live”.</span>` : ""}</div>
           <ul>${itemsHTML()}</ul>
-          <p class="foot">${S.role === "owner" ? "Accept guests' requests here or in Point and Yap on your Mac." : S.privateMode ? `Only ${esc(S.owner)} sees what you send.` : S.trusted ? "Requests go straight to the agent." : `${esc(S.owner)} accepts each request before an agent works on it.`}</p>`;
+          ${S.role === "owner" ? sessionHTML() : `<div class="rules">
+            <span>${S.trusted ? `${ICON.spark}Requests go straight to the agent` : `${ICON.check}${esc(S.owner)} accepts each request first`}</span>
+            <span>${S.privateMode ? `${ICON.lock}Only ${esc(S.owner)} sees what you send` : `${ICON.eye}Everyone here sees the requests`}</span></div>`}`;
         if (S.focus) setTimeout(() => { root.querySelector("li.focus")?.scrollIntoView({ block: "nearest" }); S.focus = null; }, 0);
       }
     }
@@ -784,6 +888,14 @@
       if (b.id === "talk") start();
       else if (b.id === "stop") stop();
       else if (b.id === "cancel") cancel();
+      else if (b.id === "areaBtn") areaMode(!S.area);
+      else if (b.id === "copyLink") { navigator.clipboard?.writeText(S.link).then(() => { S.copied = true; render(); setTimeout(() => { S.copied = false; render(); }, 1600); }, () => toast(S.link, 6000)); }
+      else if (b.dataset.set === "trusted") { S.straight = !S.straight; render(); setting({ trusted: S.straight }); }
+      else if (b.dataset.set === "private") { S.privateMode = !S.privateMode; render(); setting({ private: S.privateMode }); }
+      else if (b.id === "endLive") { S.ending = true; render(); }
+      else if (b.id === "endNo") { S.ending = false; render(); }
+      else if (b.id === "endYes") { S.ending = false; setting({ end: true }); }
+      else if (b.dataset.unmark) unmark(+b.dataset.unmark);
       else if (b.id === "type") { S.typing = { t0: performance.now(), points: [] }; S.panel = true; render(); setTimeout(() => root.querySelector("#text")?.focus(), 0); }
       else if (b.id === "later") { S.asking = null; S.panel = false; render(); }
       else if (b.id === "typeCancel") { S.typing = null; render(); }
@@ -820,9 +932,35 @@
     .cursor.talking span::after { content: " · talking"; font-weight: 400; }
     .mark { position: absolute; left: 0; top: 0; border: 2px solid #e5484d; border-radius: 6px; background: rgba(229,72,77,.06); }
     .mark.hover { border-style: dashed; border-color: rgba(229,72,77,.6); background: none; }
-    .mark span { position: absolute; left: -9px; top: -9px; min-width: 18px; height: 18px; border-radius: 9px; background: #e5484d; color: #fff;
-      font-size: 10px; font-weight: 700; display: grid; place-items: center; padding: 0 4px; border: 2px solid #fff; }
-    .mark.hover span { display: none; }
+    .mark.area { border-style: solid; border-radius: 2px; background: rgba(229,72,77,.1); }
+    .mark .num { position: absolute; left: -9px; top: -9px; min-width: 18px; height: 18px; border-radius: 9px; background: #e5484d; color: #fff;
+      font-size: 10px; font-weight: 700; display: grid; place-items: center; padding: 0 4px; border: 2px solid #fff; line-height: 1; gap: 0;
+      pointer-events: auto; cursor: pointer; box-shadow: none; }
+    .mark .num:hover { font-size: 0; min-width: 18px; padding: 0; background: #1a1a1a; }
+    .mark .num:hover::after { content: "×"; font-size: 13px; }
+    .mark.hover .num { display: none; }
+    #area { position: fixed; inset: 0; z-index: 2147483646; cursor: crosshair; touch-action: none; }
+    #area .sel { position: absolute; left: 0; top: 0; border: 2px solid #e5484d; background: rgba(229,72,77,.1); border-radius: 2px; }
+    button.ghost.on { background: #e5484d22; color: #e5484d; }
+    .rules { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 12px; font-size: 12px; color: #8a8d94; }
+    .rules span { display: inline-flex; align-items: center; gap: 5px; } .rules svg { width: 12px; height: 12px; }
+    .session { margin-top: 12px; padding-top: 12px; border-top: 1px solid #ececef; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+    .srow { display: flex; align-items: center; gap: 8px; background: #f6f6f7; border-radius: 9px; padding: 4px 4px 4px 8px; }
+    .srow code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: #5c5f66; }
+    .srow button { flex: none; height: 26px; font-size: 12px; }
+    .livebadge { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; font-weight: 700; letter-spacing: .06em; color: #e5484d; background: #e5484d1a; border-radius: 10px; padding: 3px 7px; }
+    .livebadge i { width: 6px; height: 6px; border-radius: 3px; background: #e5484d; animation: breathe 1.8s ease-in-out infinite; }
+    @keyframes breathe { 50% { opacity: .35; } }
+    button.setting { all: unset; display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 2px 0; }
+    button.setting > span { flex: 1; display: grid; gap: 1px; } button.setting b { font-size: 12.5px; font-weight: 500; } button.setting small { font-size: 11.5px; color: #8a8d94; }
+    .switch { display: block; flex: none; width: 28px; height: 16px; border-radius: 8px; background: #d4d5d9; position: relative; transition: background .15s; }
+    .switch::after { content: ""; position: absolute; left: 2px; top: 2px; width: 12px; height: 12px; border-radius: 6px; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
+    .switch.on { background: #30a46c; } .switch.on::after { transform: translateX(12px); }
+    button.danger { color: #fff; background: #e5484d; border-color: #e5484d; } button.danger:hover { background: #d13d42; }
+    button.danger.ghosty { justify-self: start; color: #e5484d; background: transparent; border-color: transparent; padding: 0 2px; height: 24px; }
+    button.danger.ghosty:hover { text-decoration: underline; background: transparent; }
+    .ending { display: flex; align-items: center; gap: 6px; font-size: 12px; } .ending span { flex: 1; color: #5c5f66; }
+    button.link { all: unset; color: inherit; text-decoration: underline; cursor: pointer; }
     .pin { position: absolute; left: 0; top: 0; width: 18px; height: 18px; border-radius: 9px; border: 2px solid #fff; padding: 0;
       font-size: 10px; font-weight: 700; color: #fff; background: #b8860b; pointer-events: auto; justify-content: center; line-height: 1; gap: 0; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
     .pin[data-state="in_progress"] { background: #5c5f66; } .pin[data-state="done"] { background: #2f7a4b; } .pin[data-state="ok"] { background: #2f7a4b; outline: 2px solid #9ad3ae; }
@@ -891,6 +1029,7 @@
       .chip.wait { color: #9dbcf0; background: #1a2638; border-color: #2a3c58; } .chip.queued { color: #e6c87a; background: #2e2715; border-color: #4a3e1e; }
       .chip.busy { color: #c9cbd0; background: #2b2d32; border-color: #3a3c41; } .chip.done, .chip.ok { color: #7fd1a0; background: #16291e; border-color: #24452f; }
       .chip.muted { color: #8a8d94; background: #1f2024; border-color: #2b2d32; }
+      .session { border-color: #2b2d32; } .srow { background: #16171a; } .srow code, .ending span { color: #a2a5ab; } .switch { background: #3a3c41; }
     }
     @media (max-width: 520px) { .who, kbd, .hint, .agent span { display: none; } }
   `;
@@ -899,12 +1038,14 @@
     host = document.createElement("pointandyap-bar");
     root = host.attachShadow({ mode: "open" });
     root.innerHTML = `<style>${CSS_TEXT}</style><div class="layer" id="marks"></div><div class="layer" id="pins"></div><div class="layer" id="cursors"></div>
+      <div id="area" hidden><div class="sel" hidden></div></div>
       <div id="ui"><div id="toast" hidden></div><div id="panel" hidden></div><div id="bar"></div><button id="mini" title="Point and Yap" hidden></button></div>`;
     const parent = () => document.body || document.documentElement;
     parent().append(host);
     // Some apps replace the whole body (a router, a framework's error page): come back when that happens.
     setInterval(() => { if (!host.isConnected) parent().append(host); }, 1500);
     wire();
+    wireArea();
     render();
     connect();
     requestAnimationFrame(drawCursors);

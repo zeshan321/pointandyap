@@ -16,9 +16,11 @@ struct MainView: View {
             HStack(spacing: 10) {
                 AppTitle()
                 Spacer()
-                if state.live == nil {
-                    Button { state.pickPort() } label: { Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 13)) }
-                        .buttonStyle(SmallButton()).help("Go live: share the app you're building on localhost, and others point and talk on it")
+                if state.live == nil && !state.pickingPort && !state.liveStarting {
+                    Button { state.pickPort() } label: {
+                        HStack(spacing: 5) { Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 11)); Text("Go live") }
+                    }
+                    .buttonStyle(SmallButton()).help("Share the app you're building on localhost: others point and talk on it")
                 }
                 Button { state.showSettings = true } label: { Image(systemName: "gearshape").font(.system(size: 13)) }
                     .buttonStyle(SmallButton()).help("Settings (⌘,)")
@@ -295,29 +297,52 @@ struct SessionRowView: View {
     }
 }
 
-/// The floating pill while recording: red dot, time, Stop.
+/// The floating pill while recording: red dot, time, what is pointed at (with undo), Area, Stop.
 struct PillView: View {
     @ObservedObject var state: AppState
     @State private var pulse = false
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Circle().fill(Ink.red).frame(width: 8, height: 8)
                 .opacity(pulse ? 0.35 : 1)
                 .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulse)
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                Text(elapsed(at: ctx.date)).font(.geistMono(13)).foregroundStyle(Ink.primary).frame(width: 40, alignment: .leading)
+                Text(elapsed(at: ctx.date)).font(.geistMono(13)).foregroundStyle(Ink.primary).frame(width: 36, alignment: .leading)
             }
+            Divider().frame(height: 16)
+            if state.areaOn {
+                Text("Drag over the area").font(.geist(12)).foregroundStyle(Ink.red).fixedSize()
+            } else if state.pointed > 0 {
+                Text("\(state.pointed) pointed").font(.geist(12)).foregroundStyle(Ink.secondary).fixedSize()
+                Button(action: state.takeBackLast) { Image(systemName: "arrow.uturn.backward").font(.system(size: 11, weight: .semibold)) }
+                    .buttonStyle(.plain).foregroundStyle(Ink.muted).help("Take back the last one (or ⌥-click any number)")
+            } else {
+                Text("Point and talk").font(.geist(12)).foregroundStyle(Ink.muted).fixedSize()
+            }
+            Spacer(minLength: 0)
+            Button(action: state.toggleArea) {
+                HStack(spacing: 4) {
+                    Image(systemName: "rectangle.dashed").font(.system(size: 11, weight: .semibold))
+                    Text("Area").font(.geist(12))
+                }
+                .padding(.horizontal, 8).frame(height: 26)
+                .background(RoundedRectangle(cornerRadius: 7).fill(state.areaOn ? Ink.red.opacity(0.12) : Color.clear))
+                .foregroundStyle(state.areaOn ? Ink.red : Ink.secondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).help("Drag a box over an area (or hold ⌥ and drag)")
             Button(action: state.cancel) { Text("esc").font(.geist(11)).foregroundStyle(Ink.faint) }
                 .buttonStyle(.plain).help("Cancel and keep nothing")
             Button(action: state.stop) { Text("Stop  ") + Text("⌃⌃").font(.system(size: 11)).foregroundColor(Color(hex: 0x9A9DA4)) }.buttonStyle(SmallButton(dark: true))
         }
         .padding(.leading, 14).padding(.trailing, 6)
-        .frame(height: 40)
+        .frame(width: PillView.width, height: 40)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.white))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Ink.line, lineWidth: 1))
         .onAppear { pulse = true }
     }
+    static let width = 360.0
 
     private func elapsed(at now: Date) -> String {
         guard case .recording(let s) = state.phase else { return "0:00" }
@@ -353,68 +378,247 @@ struct StatusPill: View {
     }
 }
 
-/// Go live: pick the dev server, then the link, who is in it, and End.
+/// Go live: pick the dev server; then the link, who is in it, the agent, a few settings, and End.
 struct LiveCard: View {
     @ObservedObject var state: AppState
     @State private var port = ""
+    @State private var copied = false
+    @State private var showSettings: Bool
+
+    init(state: AppState, settingsOpen: Bool = false) { self.state = state; _showSettings = State(initialValue: settingsOpen) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let live = state.live {
-                HStack(spacing: 8) {
-                    Circle().fill(Ink.red).frame(width: 7, height: 7)
-                    Text("Live: localhost:\(String(live.upstream))").font(.geist(13, .medium)).foregroundStyle(Ink.primary)
-                    Spacer()
-                    Button("Copy link") { state.copyLiveLink() }.buttonStyle(SmallButton())
-                    Button("End") { state.endLive() }.buttonStyle(SmallButton(dark: true))
-                }
-                Text(state.livePeople.isEmpty ? "Nobody yet. Send the link: they use your app in their browser, point and talk."
-                     : "In it: \(state.livePeople.joined(separator: ", ")). Their requests show up below.")
-                    .font(.geist(12)).foregroundStyle(Ink.muted).fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 6) {
-                    Circle().fill(state.liveAgents.isEmpty ? Ink.faint : Color(hex: 0x30A46C)).frame(width: 6, height: 6)
-                    Text(state.liveAgents.isEmpty ? "No agent is waiting for requests" : "\(state.liveAgents.joined(separator: ", ")) is waiting for requests")
-                        .font(.geist(12)).foregroundStyle(Ink.muted)
-                    Spacer()
-                    if state.liveAgents.isEmpty {
-                        Button("Copy for your agent") { state.copyAgentPrompt() }.buttonStyle(SmallButton())
-                            .help(AppState.liveAgentPrompt)
-                    }
-                }
-                HStack {
-                    Toggle("Send their requests straight to agents", isOn: Binding(get: { live.trusted }, set: { live.trusted = $0; state.objectWillChange.send() }))
-                        .toggleStyle(.switch).controlSize(.mini).font(.geist(12)).foregroundStyle(Ink.muted)
-                    Spacer()
-                    Button("Open as me") { state.openLiveAsMe() }.buttonStyle(.plain).font(.geist(12)).foregroundStyle(Ink.muted).underline()
-                }
-                Text("Anyone with the link can use your dev server, its API routes included, until you end it. The link goes through Cloudflare.")
-                    .font(.geist(11)).foregroundStyle(Ink.faint).fixedSize(horizontal: false, vertical: true)
-            } else if state.liveStarting {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Making the link…").font(.geist(13)).foregroundStyle(Ink.primary)
-                }
-            } else {
-                Text("Share the app you're building").font(.geist(14, .medium)).foregroundStyle(Ink.primary)
-                Text("Anyone with the link uses it in their browser, points and talks. Your agent can fix things while they watch.")
-                    .font(.geist(12)).foregroundStyle(Ink.muted).fixedSize(horizontal: false, vertical: true)
-                if !state.devServers.isEmpty {
-                    HStack(spacing: 6) {
-                        ForEach(state.devServers.prefix(4)) { d in
-                            Button("\(String(d.port)) · \(d.name)") { state.goLive(d.port) }.buttonStyle(SmallButton())
-                        }
-                    }
-                }
-                HStack(spacing: 8) {
-                    TextField("Port, e.g. 3000", text: $port).textFieldStyle(.roundedBorder).font(.geist(13)).frame(width: 130)
-                        .onSubmit { if let p = Int(port) { state.goLive(p) } }
-                    Spacer()
-                    Button("Cancel") { state.pickingPort = false }.buttonStyle(SmallButton())
-                    Button("Go live") { if let p = Int(port) { state.goLive(p) } }.buttonStyle(SmallButton(dark: true)).disabled(Int(port) == nil)
-                }
-            }
+        Group {
+            if let live = state.live { on(live) }
+            else if state.liveStarting { starting }
+            else { picker }
         }
         .padding(14)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Ink.field))
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Ink.line, lineWidth: 1))
+        .shadow(color: .black.opacity(0.05), radius: 8, y: 2)
+    }
+
+    // MARK: Live
+
+    private func on(_ live: LiveSession) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                LiveBadge()
+                Text("localhost:\(String(live.upstream))").font(.geistMono(12)).foregroundStyle(Ink.muted)
+                Spacer()
+                TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                    Text(Self.clock(ctx.date.timeIntervalSince(live.started))).font(.geistMono(12)).foregroundStyle(Ink.faint)
+                }
+                Button("End") { state.endLive() }.buttonStyle(EndButton()).help("End the link: guests lose access right away")
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: "link").font(.system(size: 11, weight: .semibold)).foregroundStyle(Ink.faint)
+                Text(Self.short(live.guestLink)).font(.geistMono(12)).foregroundStyle(Ink.secondary).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 4)
+                Button(copied ? "Copied" : "Copy link") {
+                    state.copyLiveLink(); copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { copied = false }
+                }.buttonStyle(SmallButton(dark: true))
+            }
+            .padding(.leading, 10).padding(.trailing, 4).frame(height: 36)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Ink.field))
+
+            HStack(spacing: 8) {
+                if state.livePeople.isEmpty {
+                    Image(systemName: "person.2").font(.system(size: 11)).foregroundStyle(Ink.faint).frame(width: 22)
+                    Text("Nobody yet. Send the link: they use your app in their browser, point and talk.")
+                        .font(.geist(12)).foregroundStyle(Ink.muted).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    HStack(spacing: -6) { ForEach(state.livePeople.prefix(5), id: \.self) { Avatar(name: $0) } }
+                    Text(Self.people(state.livePeople)).font(.geist(12)).foregroundStyle(Ink.secondary).lineLimit(2)
+                }
+            }
+
+            HStack(spacing: 8) {
+                Circle().fill(state.liveAgents.isEmpty ? Ink.faint : Color(hex: 0x30A46C)).frame(width: 7, height: 7).frame(width: 22)
+                Text(state.liveAgents.isEmpty ? "No agent is listening yet" : "\(state.liveAgents.joined(separator: ", ")) is listening")
+                    .font(.geist(12)).foregroundStyle(state.liveAgents.isEmpty ? Ink.muted : Ink.secondary)
+                Spacer()
+                if state.liveAgents.isEmpty {
+                    Button("Copy for your agent") { state.copyAgentPrompt() }.buttonStyle(SmallButton()).help(AppState.liveAgentPrompt)
+                }
+            }
+
+            Divider()
+
+            Button { withAnimation(.easeOut(duration: 0.15)) { showSettings.toggle() } } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).rotationEffect(.degrees(showSettings ? 90 : 0))
+                    Text("Settings").font(.geist(12, .medium))
+                    if !showSettings {
+                        Text("· " + Self.summary(live)).font(.geist(12)).foregroundStyle(Ink.faint).lineLimit(1)
+                    }
+                    Spacer()
+                }
+                .foregroundStyle(Ink.secondary).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+
+            if showSettings {
+                VStack(alignment: .leading, spacing: 10) {
+                    SettingRow(title: "Send requests straight to agents", detail: live.trusted ? "Guests' requests go to the queue as they come." : "You accept each request first.",
+                               on: Binding(get: { live.trusted }, set: { live.trusted = $0; state.objectWillChange.send(); Task { await live.room.settings(live) } }))
+                    SettingRow(title: "Guests see only their own requests", detail: live.privateMode ? "Each guest sees what they asked for, not the others." : "Everyone in the link sees every request.",
+                               on: Binding(get: { live.privateMode }, set: { live.privateMode = $0; state.objectWillChange.send(); Task { await live.room.settings(live) } }))
+                    HStack {
+                        Text("Your own view, with Accept").font(.geist(12)).foregroundStyle(Ink.muted)
+                        Spacer()
+                        Button("Open as me") { state.openLiveAsMe() }.buttonStyle(SmallButton())
+                    }
+                }
+                .padding(.leading, 15)
+            }
+
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "lock").font(.system(size: 10)).foregroundStyle(Ink.faint).padding(.top, 1)
+                Text("Anyone with the link can use your dev server, its API routes included, until you end it. It goes through a Cloudflare tunnel.")
+                    .font(.geist(11)).foregroundStyle(Ink.faint).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    // MARK: Starting
+
+    private var starting: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Making the link…").font(.geist(13, .medium)).foregroundStyle(Ink.primary)
+                Text("Opening a tunnel to your dev server. Usually a few seconds.").font(.geist(12)).foregroundStyle(Ink.muted)
+            }
+            Spacer()
+        }
+    }
+
+    // MARK: Picking the dev server
+
+    private var picker: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Go live").font(.geist(14, .medium)).foregroundStyle(Ink.primary)
+                    Text("Share the app you're building. People open the link, point and talk; your agent fixes things while they watch.")
+                        .font(.geist(12)).foregroundStyle(Ink.muted).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Button { state.pickingPort = false } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(Ink.faint).frame(width: 20, height: 20) }
+                    .buttonStyle(.plain).help("Cancel")
+            }
+            if !state.devServers.isEmpty {
+                VStack(spacing: 6) {
+                    ForEach(state.devServers.prefix(4)) { d in
+                        Button { state.goLive(d.port) } label: { ServerRow(port: d.port, name: d.name) }.buttonStyle(.plain)
+                    }
+                }
+            }
+            HStack(spacing: 8) {
+                TextField(state.devServers.isEmpty ? "Port, e.g. 3000" : "Another port", text: $port).textFieldStyle(.roundedBorder).font(.geist(13))
+                    .onSubmit { if let p = Int(port) { state.goLive(p) } }
+                Button("Go live") { if let p = Int(port) { state.goLive(p) } }.buttonStyle(SmallButton(dark: true)).disabled(Int(port) == nil)
+            }
+        }
+    }
+
+    // MARK: Text
+
+    static func clock(_ t: TimeInterval) -> String {
+        let s = max(0, Int(t))
+        return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
+    }
+    /// The link without its scheme: the host is what tells people it is the right one.
+    static func short(_ link: String) -> String { link.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: "") }
+    static func people(_ p: [String]) -> String {
+        switch p.count {
+        case 1: return "\(p[0]) is in"
+        case 2: return "\(p[0]) and \(p[1]) are in"
+        default: return "\(p.prefix(2).joined(separator: ", ")) and \(p.count - 2) more are in"
+        }
+    }
+    static func summary(_ live: LiveSession) -> String {
+        [live.trusted ? "Straight to agents" : "You accept each request", live.privateMode ? "private" : nil].compactMap { $0 }.joined(separator: " · ")
+    }
+}
+
+/// A red dot that breathes, and LIVE.
+struct LiveBadge: View {
+    @State private var pulse = false
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle().fill(Ink.red).frame(width: 6, height: 6).opacity(pulse ? 0.35 : 1)
+                .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
+            Text("LIVE").font(.geist(10, .semibold)).tracking(0.6).foregroundStyle(Ink.red)
+        }
+        .padding(.horizontal, 7).frame(height: 20)
+        .background(Capsule().fill(Ink.red.opacity(0.1)))
+        .onAppear { pulse = true }
+    }
+}
+
+/// A guest's initial on a colour of their own.
+struct Avatar: View {
+    let name: String
+    private static let colors: [UInt32] = [0x5B5BD6, 0x0D74CE, 0x2F7A4B, 0xB8860B, 0xC2298A, 0xD9480F]
+    var body: some View {
+        let c = Self.colors[abs(name.unicodeScalars.reduce(0) { $0 &* 31 &+ Int($1.value) }) % Self.colors.count]
+        Text(String(name.prefix(1)).uppercased()).font(.geist(10, .semibold)).foregroundStyle(.white)
+            .frame(width: 22, height: 22).background(Circle().fill(Color(hex: c)))
+            .overlay(Circle().strokeBorder(Color.white, lineWidth: 1.5))
+            .help(name)
+    }
+}
+
+/// A dev server found on this Mac, to go live with in one click.
+struct ServerRow: View {
+    let port: Int
+    let name: String
+    @State private var hover = false
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().fill(Color(hex: 0x30A46C)).frame(width: 6, height: 6)
+            Text("localhost:\(String(port))").font(.geistMono(12)).foregroundStyle(Ink.primary)
+            Text(name).font(.geist(12)).foregroundStyle(Ink.faint)
+            Spacer()
+            Text("Go live").font(.geist(12, .medium)).foregroundStyle(hover ? Ink.primary : Ink.muted)
+            Image(systemName: "arrow.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(hover ? Ink.primary : Ink.faint)
+        }
+        .padding(.horizontal, 10).frame(height: 34)
+        .background(RoundedRectangle(cornerRadius: 8).fill(hover ? Ink.field : Color.white))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Ink.line, lineWidth: 1))
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+    }
+}
+
+/// A switch with what it does now underneath.
+struct SettingRow: View {
+    let title: String
+    let detail: String
+    @Binding var on: Bool
+    var body: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.geist(12)).foregroundStyle(Ink.primary)
+                Text(detail).font(.geist(11)).foregroundStyle(Ink.faint).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Toggle("", isOn: $on).labelsHidden().toggleStyle(.switch).controlSize(.mini)
+        }
+    }
+}
+
+/// End: quiet until it matters.
+struct EndButton: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.geist(12, .medium)).foregroundStyle(Ink.red)
+            .padding(.horizontal, 10).frame(height: 26)
+            .background(RoundedRectangle(cornerRadius: 7).fill(Ink.red.opacity(configuration.isPressed ? 0.16 : 0.08)))
+            .contentShape(Rectangle())
     }
 }

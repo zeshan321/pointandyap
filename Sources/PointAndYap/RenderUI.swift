@@ -43,6 +43,13 @@ enum RenderUI {
         s.sessions = [SessionRow(dir: dir.appendingPathComponent("g"), date: Date(), duration: 7, points: 3, title: "This counter button should be green. And the heading", status: "triage", by: "Dana", author: "Dana", requests: 2),
                       SessionRow(dir: dir.appendingPathComponent("h"), date: Date().addingTimeInterval(-240), duration: 5, points: 1, title: "The card should have more space around it", status: "done", by: "claude-code", author: "Sam", confirmed: true)]
         write(MainView(state: s), "window-live.png", dir)
+        write(LiveCard(state: s, settingsOpen: true).frame(width: 352).padding(24).background(Color.white), "live-settings.png", dir)
+        s.livePeople = []; s.liveAgents = []
+        write(LiveCard(state: s).frame(width: 352).padding(24).background(Color.white), "live-empty.png", dir)
+        s.livePeople = ["Dana", "Sam"]; s.liveAgents = ["Claude Code"]
+        s.live = nil; s.liveStarting = true
+        write(LiveCard(state: s).frame(width: 352).padding(24).background(Color.white), "live-starting.png", dir)
+        s.liveStarting = false
         s.live = nil
         s.liveAgents = []
         s.updateReady = ready
@@ -65,6 +72,10 @@ enum RenderUI {
         write(MainView(state: q), "agents.png", dir)
         let r = AppState(); r.phase = .recording(Date().addingTimeInterval(-14))
         write(PillView(state: r).padding(20).background(Color(hex: 0xDADCE0)), "pill.png", dir)
+        r.pointed = 3
+        write(PillView(state: r).padding(20).background(Color(hex: 0xDADCE0)), "pill-pointed.png", dir)
+        r.areaOn = true
+        write(PillView(state: r).padding(20).background(Color(hex: 0xDADCE0)), "pill-area.png", dir)
     }
 
     /// Through a hosting view in an offscreen window, so AppKit controls (switches, pickers, scroll views) draw too.
